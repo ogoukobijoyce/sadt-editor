@@ -1,0 +1,248 @@
+/* ============================================================
+   SADT Editor — style.css
+   ============================================================ */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  font-family: 'Segoe UI', Arial, sans-serif;
+  font-size: 14px;
+}
+
+/* ── Application shell ── */
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #0f1723;
+}
+
+/* ── Toolbar ── */
+#toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 12px;
+  background: linear-gradient(90deg, #0f1723 0%, #162033 100%);
+  border-bottom: 1px solid #1e3050;
+  flex-shrink: 0;
+  min-height: 48px;
+  user-select: none;
+}
+
+.tb-section {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.tb-brand { flex-shrink: 0; }
+
+.tb-tools {
+  flex: 1;
+  flex-wrap: wrap;
+}
+
+.tb-actions { margin-left: auto; }
+
+.brand-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #7dd3fc;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+  padding-right: 8px;
+  border-right: 1px solid #1e3050;
+  margin-right: 4px;
+}
+
+.tb-sep {
+  width: 1px;
+  height: 26px;
+  background: #1e3050;
+  margin: 0 3px;
+}
+
+/* Buttons */
+.tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 11px;
+  border: 1px solid #1e3050;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.04);
+  color: #9cb3cc;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.tool-btn svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+.tool-btn:hover {
+  background: rgba(125, 211, 252, 0.10);
+  border-color: #7dd3fc;
+  color: #e0f2fe;
+}
+
+.tool-btn.active {
+  background: rgba(59, 130, 246, 0.20);
+  border-color: #7dd3fc;
+  color: #7dd3fc;
+  font-weight: 600;
+}
+
+.tool-btn.danger {
+  border-color: #7f1d1d;
+  color: #fca5a5;
+}
+.tool-btn.danger:hover {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: #ef4444;
+  color: #fecaca;
+}
+
+/* Free-arrow group */
+.free-arrow-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+#arrow-type-select {
+  padding: 4px 7px;
+  border: 1px solid #1e3050;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.04);
+  color: #9cb3cc;
+  font-size: 12px;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.12s;
+}
+#arrow-type-select:focus {
+  border-color: #7dd3fc;
+  outline: 2px solid rgba(125, 211, 252, 0.4);
+  outline-offset: 1px;
+}
+
+/* ── Canvas container ── */
+#canvas-container {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  background: #f8f9fa;
+}
+
+#canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: default;
+}
+
+/* ── Label editor overlay ── */
+#label-editor {
+  display: none;
+  position: absolute;
+  z-index: 20;
+  pointer-events: auto;
+}
+
+#label-input {
+  padding: 4px 8px;
+  border: 2px solid #2563eb;
+  border-radius: 5px;
+  background: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: Arial, sans-serif;
+  text-align: center;
+  outline: none;
+  box-shadow: 0 2px 12px rgba(37,99,235,0.25);
+  width: 100%;
+  min-width: 80px;
+}
+
+/* ── Legend ── */
+#legend {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: rgba(255,255,255,0.88);
+  backdrop-filter: blur(4px);
+  border: 1px solid #dde3ea;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 11.5px;
+  color: #444;
+  pointer-events: none;
+  box-shadow: 0 1px 6px rgba(0,0,0,0.08);
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.dot.input     { background: #2196F3; }
+.dot.output    { background: #4CAF50; }
+.dot.control   { background: #F44336; }
+.dot.mechanism { background: #FF9800; }
+
+/* ── Status bar ── */
+#status-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 3px 12px;
+  background: #0f1723;
+  border-top: 1px solid #1e3050;
+  font-size: 11.5px;
+  color: #5b7794;
+  flex-shrink: 0;
+  min-height: 24px;
+}
+
+#status-mode {
+  font-weight: 600;
+  color: #7dd3fc;
+  white-space: nowrap;
+}
+
+#status-hint {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#status-sel {
+  white-space: nowrap;
+  color: #9cb3cc;
+}
