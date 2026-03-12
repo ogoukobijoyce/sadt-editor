@@ -28,6 +28,12 @@
           Rectangle
         </button>
 
+        <!-- Sous-rectangle -->
+        <button id="btn-add-sub-rect" class="tool-btn" title="Ajouter un sous-rectangle dans le rectangle sélectionné">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><rect x="6" y="9" width="12" height="7" rx="1.5"/></svg>
+          Sous-rect
+        </button>
+
         <!-- Flèche connexion -->
         <button id="btn-add-arrow" class="tool-btn" title="Flèche de connexion entre rectangles (A)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="12" x2="17" y2="12"/><polyline points="13,7 18,12 13,17"/></svg>
@@ -90,7 +96,7 @@
     <!-- ── Barre de statut ── -->
     <footer id="status-bar">
       <span id="status-mode">Mode : Sélection</span>
-      <span id="status-hint">Cliquez pour sélectionner · Glissez pour déplacer · Double-clic pour renommer · Suppr pour effacer</span>
+      <span id="status-hint">Cliquez pour sélectionner · Glissez pour déplacer · Double-clic pour renommer · Suppr pour effacer · Glissez un rect dans un autre pour imbriquer</span>
       <span id="status-sel"></span>
     </footer>
 

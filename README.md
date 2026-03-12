@@ -21,6 +21,23 @@
 | Redimensionner | Sélectionnez le rectangle → faites glisser l'un des 4 coins bleus |
 | Supprimer | Sélectionnez → cliquez **Supprimer** ou appuyez sur la touche **Suppr** |
 
+### Rectangles imbriqués (Décomposition hiérarchique SADT)
+
+Il est possible de **placer des rectangles à l'intérieur d'autres rectangles** pour représenter la décomposition hiérarchique (A0 contient A1, A2, A3…).
+
+| Action | Comment faire |
+|--------|--------------|
+| Ajouter un sous-rectangle | Sélectionnez un rectangle parent → cliquez **Sous-rect** dans la barre d'outils |
+| Imbriquer par glisser-déposer | Glissez un rectangle et déposez-le à l'intérieur d'un autre rectangle |
+| Désimbriquer | Glissez le rectangle enfant hors de son parent et déposez-le dans le vide |
+| Déplacer le parent | Glissez le rectangle parent — tous ses enfants se déplacent avec lui |
+| Agrandissement automatique | Quand un enfant est déplacé vers le bord, le parent s'agrandit automatiquement |
+
+**Repères visuels des rectangles parents :**
+- Fond légèrement bleuté
+- Bordure plus épaisse (bleue marine)
+- Ligne de séparation sous l'étiquette du parent, laissant la zone du bas aux sous-fonctions
+
 ### Flèches (Flux)
 
 #### Flèche de connexion (entre deux rectangles)
@@ -45,8 +62,10 @@
 | Mécanisme (Mechanism) | 🟠 Orange | Côté inférieur |
 | Connexion | ⬛ Gris | Rect → Rect |
 
-#### Étiqueter une flèche
-Double-cliquez sur la flèche, saisissez l'étiquette, appuyez sur **Entrée**.
+#### Étiquettes des flèches
+- Double-cliquez sur la flèche, saisissez l'étiquette, appuyez sur **Entrée**.
+- L'étiquette s'affiche **à côté de la flèche** (décalée perpendiculairement à sa direction) dans un encadré coloré.
+- Si la flèche n'a pas d'étiquette, rien n'est affiché.
 
 ### Sauvegarde et chargement
 - **💾 Sauvegarder** — exporte le diagramme complet en fichier JSON.
