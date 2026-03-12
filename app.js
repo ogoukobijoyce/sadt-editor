@@ -14,6 +14,8 @@ const HANDLE_SIZE     = 8;    // px – resize-handle square side
 const ARROW_HEAD_LEN  = 14;   // px
 const ARROW_HEAD_ANG  = Math.PI / 6;  // 30°
 const GRID_STEP       = 20;   // px
+const CHILD_PADDING   = 20;   // px – minimum gap between child and parent border
+const PARENT_LABEL_H  = 28;   // px – reserved height at top of parent for its label
 
 const ARROW_COLORS = {
   input:     '#2196F3',   // blue
@@ -55,7 +57,7 @@ let _id    = 1;
 function uid() { return 'e' + (_id++); }
 
 /*
- * Rect  { id, x, y, width, height, label }
+ * Rect  { id, x, y, width, height, label, parentId }
  * Arrow { id, label, arrowType,
  *         startRectId, startAnchor,   // anchor = { side, t }
  *         startX, startY,             // fallback / free endpoint
@@ -117,6 +119,21 @@ function getArrowEndpoints(arrow) {
   } else { x2 = arrow.endX; y2 = arrow.endY; }
 
   return { x1, y1, x2, y2 };
+}
+
+/** Compute the label position beside an arrow (offset perpendicular to the arrow). */
+function getArrowLabelPos(arrow) {
+  const { x1, y1, x2, y2 } = getArrowEndpoints(arrow);
+  const mx = (x1 + x2) / 2;
+  const my = (y1 + y2) / 2;
+  const dx = x2 - x1, dy = y2 - y1;
+  const len = Math.hypot(dx, dy) || 1;
+  // Clockwise 90° perpendicular: (dy/len, -dx/len).
+  // For a right-going arrow (dx>0, dy≈0) this points upward,
+  // placing the label above the line — the natural reading position.
+  const nx = dy / len;
+  const ny = -dx / len;
+  return { x: mx + nx * 16, y: my + ny * 16 };
 }
 
 /** Find nearest rect border point within SNAP_RADIUS.
@@ -182,8 +199,9 @@ function rectHandles(rect) {
 // ─── Hit testing ─────────────────────────────────────────────
 
 function hitRect(mx, my) {
-  for (let i = rects.length - 1; i >= 0; i--) {
-    const r = rects[i];
+  const order = getRenderOrder();
+  for (let i = order.length - 1; i >= 0; i--) {
+    const r = order[i];
     if (mx >= r.x && mx <= r.x + r.width && my >= r.y && my <= r.y + r.height)
       return r.id;
   }
@@ -203,9 +221,8 @@ function hitArrowLabel(mx, my) {
   for (let i = arrows.length - 1; i >= 0; i--) {
     const a = arrows[i];
     if (!a.label) continue;
-    const { x1, y1, x2, y2 } = getArrowEndpoints(a);
-    const lx = (x1 + x2) / 2, ly = (y1 + y2) / 2;
-    if (Math.hypot(mx - lx, my - ly) < 20) return a.id;
+    const { x, y } = getArrowLabelPos(a);
+    if (Math.hypot(mx - x, my - y) < 20) return a.id;
   }
   return null;
 }
@@ -266,12 +283,14 @@ function wrapText(text, maxWidth) {
 function drawRect(rect, selected) {
   ctx.save();
   const { x, y, width: w, height: h, label } = rect;
+  const isParent = rects.some(r => r.parentId === rect.id);
 
   if (selected) { ctx.shadowColor = '#3b82f6'; ctx.shadowBlur = 10; }
 
-  ctx.fillStyle   = '#ffffff';
-  ctx.strokeStyle = selected ? '#2563eb' : '#374151';
-  ctx.lineWidth   = selected ? 2.5 : 1.5;
+  // Visual style: parent rects have a blue-tinted background and thicker border
+  ctx.fillStyle   = isParent ? '#eef6ff' : '#ffffff';
+  ctx.strokeStyle = selected ? (isParent ? '#1d4ed8' : '#2563eb') : (isParent ? '#1e40af' : '#374151');
+  ctx.lineWidth   = selected ? (isParent ? 3 : 2.5) : (isParent ? 2 : 1.5);
 
   // Rounded rect (with fallback for older browsers)
   ctx.beginPath();
@@ -281,17 +300,32 @@ function drawRect(rect, selected) {
   ctx.stroke();
   ctx.shadowBlur = 0;
 
-  // Label
+  // Horizontal separator below the label area for parent rects
+  if (isParent) {
+    ctx.strokeStyle = selected ? '#1d4ed8' : '#93c5fd';
+    ctx.lineWidth   = 1;
+    ctx.beginPath();
+    ctx.moveTo(x + 2, y + PARENT_LABEL_H);
+    ctx.lineTo(x + w - 2, y + PARENT_LABEL_H);
+    ctx.stroke();
+  }
+
+  // Label: pinned to the top header for parents, centred for leaf rects
   ctx.font         = 'bold 13px Arial, sans-serif';
   ctx.fillStyle    = '#111827';
   ctx.textAlign    = 'center';
   ctx.textBaseline = 'middle';
-  const lines   = wrapText(label || 'Fonction', w - 16);
-  const lh      = 17;
-  let lineY     = y + h / 2 - (lines.length * lh) / 2 + lh / 2;
-  for (const ln of lines) {
-    ctx.fillText(ln, x + w / 2, lineY, w - 12);
-    lineY += lh;
+
+  if (isParent) {
+    ctx.fillText(label || 'Fonction', x + w / 2, y + PARENT_LABEL_H / 2, w - 12);
+  } else {
+    const lines = wrapText(label || 'Fonction', w - 16);
+    const lh    = 17;
+    let lineY   = y + h / 2 - (lines.length * lh) / 2 + lh / 2;
+    for (const ln of lines) {
+      ctx.fillText(ln, x + w / 2, lineY, w - 12);
+      lineY += lh;
+    }
   }
 
   // Resize handles
@@ -329,18 +363,19 @@ function drawArrow(arrow, selected) {
 
   drawArrowHead(x2, y2, Math.atan2(y2 - y1, x2 - x1));
 
-  // Label bubble
+  // Label beside the arrow (offset perpendicular to its direction)
   if (arrow.label) {
-    const lx = (x1 + x2) / 2, ly = (y1 + y2) / 2;
+    const { x: lx, y: ly } = getArrowLabelPos(arrow);
     ctx.font = '11.5px Arial, sans-serif';
     const tw = ctx.measureText(arrow.label).width;
-    const bx = lx - tw / 2 - 4, by = ly - 9;
+    const pad = 4;
+    const bx = lx - tw / 2 - pad, by = ly - 9;
     ctx.fillStyle   = 'rgba(255,255,255,0.92)';
     ctx.strokeStyle = color;
     ctx.lineWidth   = 1;
     ctx.beginPath();
-    if (ctx.roundRect) { ctx.roundRect(bx, by, tw + 8, 18, 3); }
-    else               { ctx.rect(bx, by, tw + 8, 18); }
+    if (ctx.roundRect) { ctx.roundRect(bx, by, tw + pad * 2, 18, 3); }
+    else               { ctx.rect(bx, by, tw + pad * 2, 18); }
     ctx.fill(); ctx.stroke();
     ctx.fillStyle    = color;
     ctx.textAlign    = 'center';
@@ -349,6 +384,30 @@ function drawArrow(arrow, selected) {
   }
 
   ctx.restore();
+}
+
+/** Return rects sorted so that parents are drawn before their children (topological order). */
+function getRenderOrder() {
+  const result = [];
+  const visited = new Set();
+
+  function visit(r) {
+    if (visited.has(r.id)) return;
+    visited.add(r.id);
+    result.push(r);
+    for (const child of rects) {
+      if (child.parentId === r.id) visit(child);
+    }
+  }
+
+  // Start with top-level rects (no parent or orphaned)
+  for (const r of rects) {
+    if (!r.parentId || !rects.find(p => p.id === r.parentId)) visit(r);
+  }
+  // Safety: include any not yet visited
+  for (const r of rects) visit(r);
+
+  return result;
 }
 
 function render() {
@@ -362,8 +421,9 @@ function render() {
   for (const a of arrows)
     drawArrow(a, selectedType === 'arrow' && a.id === selectedId);
 
-  // Rectangles
-  for (const r of rects)
+  // Rectangles drawn in topological order: parents first, children on top
+  const renderOrder = getRenderOrder();
+  for (const r of renderOrder)
     drawRect(r, selectedType === 'rect' && r.id === selectedId);
 
   // Arrow-draw preview
@@ -470,12 +530,13 @@ function setMode(newMode) {
 
 function addRect(x, y) {
   const rect = {
-    id:     uid(),
-    x:      x - RECT_W_DEFAULT / 2,
-    y:      y - RECT_H_DEFAULT / 2,
-    width:  RECT_W_DEFAULT,
-    height: RECT_H_DEFAULT,
-    label:  'Fonction',
+    id:       uid(),
+    x:        x - RECT_W_DEFAULT / 2,
+    y:        y - RECT_H_DEFAULT / 2,
+    width:    RECT_W_DEFAULT,
+    height:   RECT_H_DEFAULT,
+    label:    'Fonction',
+    parentId: null,
   };
   rects.push(rect);
   selectedId   = rect.id;
@@ -521,6 +582,10 @@ function finishArrow(endX, endY, snap) {
 function deleteSelected() {
   if (!selectedId) return;
   if (selectedType === 'rect') {
+    // Unparent direct children before removing the rect
+    for (const r of rects) {
+      if (r.parentId === selectedId) r.parentId = null;
+    }
     rects  = rects.filter(r => r.id !== selectedId);
     arrows = arrows.filter(a => a.startRectId !== selectedId && a.endRectId !== selectedId);
   } else {
@@ -531,12 +596,121 @@ function deleteSelected() {
   updateStatus();
 }
 
+// ─── Nested-rectangle helpers ────────────────────────────────
+
+/** Recursively collect ids of all descendants of a rect. */
+function getDescendants(id) {
+  const result = new Set();
+  const queue = [id];
+  while (queue.length) {
+    const cur = queue.shift();
+    for (const r of rects) {
+      if (r.parentId === cur) { result.add(r.id); queue.push(r.id); }
+    }
+  }
+  return result;
+}
+
+/** Move all direct and indirect children of parentId by (dx, dy). */
+function moveChildren(parentId, dx, dy) {
+  for (const r of rects) {
+    if (r.parentId === parentId) {
+      r.x += dx;
+      r.y += dy;
+      moveChildren(r.id, dx, dy);
+    }
+  }
+}
+
+/** Expand parent rect so that child fits inside it (with padding).
+ *  Recursively expands ancestor chain if needed. */
+function expandParentForChild(parent, child) {
+  const reqLeft   = child.x - CHILD_PADDING;
+  // Extra CHILD_PADDING below the header separator, matching the bottom/side gaps
+  const reqTop    = child.y - PARENT_LABEL_H - CHILD_PADDING;
+  const reqRight  = child.x + child.width  + CHILD_PADDING;
+  const reqBottom = child.y + child.height + CHILD_PADDING;
+
+  let changed = false;
+
+  if (reqLeft < parent.x) {
+    const d = parent.x - reqLeft;
+    parent.x -= d; parent.width += d;
+    changed = true;
+  }
+  if (reqTop < parent.y) {
+    const d = parent.y - reqTop;
+    parent.y -= d; parent.height += d;
+    changed = true;
+  }
+  if (reqRight > parent.x + parent.width) {
+    parent.width = reqRight - parent.x;
+    changed = true;
+  }
+  if (reqBottom > parent.y + parent.height) {
+    parent.height = reqBottom - parent.y;
+    changed = true;
+  }
+
+  if (changed && parent.parentId) {
+    const gp = rects.find(r => r.id === parent.parentId);
+    if (gp) expandParentForChild(gp, parent);
+  }
+}
+
+/** Add a sub-rectangle centred inside the selected parent rect. */
+function addSubRect(parentId) {
+  const parent = rects.find(r => r.id === parentId);
+  if (!parent) return;
+
+  // Ensure the parent is large enough: header + top-padding + child + bottom-padding
+  const minW = RECT_W_DEFAULT + 2 * CHILD_PADDING;
+  const minH = RECT_H_DEFAULT + PARENT_LABEL_H + 2 * CHILD_PADDING;
+  if (parent.width  < minW) parent.width  = minW;
+  if (parent.height < minH) parent.height = minH;
+
+  // Centre the child in the interior area (below the header separator + top gap)
+  const interiorTop    = parent.y + PARENT_LABEL_H + CHILD_PADDING;
+  const availableH     = parent.height - PARENT_LABEL_H - 2 * CHILD_PADDING - RECT_H_DEFAULT;
+  const availableW     = parent.width  - 2 * CHILD_PADDING - RECT_W_DEFAULT;
+  const childX = parent.x + CHILD_PADDING + Math.max(0, availableW) / 2;
+  const childY = interiorTop              + Math.max(0, availableH) / 2;
+
+  const rect = {
+    id:       uid(),
+    x:        childX,
+    y:        childY,
+    width:    RECT_W_DEFAULT,
+    height:   RECT_H_DEFAULT,
+    label:    'Sous-fonction',
+    parentId: parentId,
+  };
+  rects.push(rect);
+  selectedId   = rect.id;
+  selectedType = 'rect';
+  render();
+  updateStatus();
+}
+
 // ─── Drag & Resize ───────────────────────────────────────────
 
 function doDrag(mx, my) {
   if (!dragInfo) return;
   const r = rects.find(r => r.id === dragInfo.id);
-  if (r) { r.x = mx - dragInfo.ox; r.y = my - dragInfo.oy; }
+  if (!r) return;
+  const newX = mx - dragInfo.ox;
+  const newY = my - dragInfo.oy;
+  const dx = newX - r.x;
+  const dy = newY - r.y;
+  r.x = newX;
+  r.y = newY;
+  // Move all children (direct and indirect) by the same delta
+  moveChildren(r.id, dx, dy);
+  // If this rect is a child, expand its parent if it drifts toward the edge
+  if (r.parentId) {
+    const parent = rects.find(p => p.id === r.parentId);
+    if (parent) expandParentForChild(parent, r);
+  }
 }
 
 function doResize(mx, my) {
@@ -597,8 +771,7 @@ function startEditArrow(id) {
   editId   = id;
   editType = 'arrow';
   labelInput.value = a.label || '';
-  const { x1, y1, x2, y2 } = getArrowEndpoints(a);
-  const lx = (x1 + x2) / 2, ly = (y1 + y2) / 2;
+  const { x: lx, y: ly } = getArrowLabelPos(a);
   positionEditor(lx - 70, ly - 14, 140, 28);
   labelEditor.style.display = 'block';
   labelInput.focus();
@@ -777,6 +950,38 @@ canvasEl.addEventListener('mousemove', e => {
 
 canvasEl.addEventListener('mouseup', e => {
   if (e.button !== 0) return;
+
+  // Drag-to-nest: when a rect is dropped, determine its parent by position
+  if (isDragging && dragInfo && moved) {
+    const dragged = rects.find(r => r.id === dragInfo.id);
+    if (dragged) {
+      const cx = dragged.x + dragged.width  / 2;
+      const cy = dragged.y + dragged.height / 2;
+      const descendants = getDescendants(dragged.id);
+      let newParentId = null;
+
+      // Find the innermost (topmost-drawn) rect that contains the centre
+      const order = getRenderOrder();
+      for (let i = order.length - 1; i >= 0; i--) {
+        const r = order[i];
+        if (r.id === dragged.id || descendants.has(r.id)) continue;
+        if (cx >= r.x && cx <= r.x + r.width && cy >= r.y && cy <= r.y + r.height) {
+          newParentId = r.id;
+          break;
+        }
+      }
+
+      if (newParentId !== dragged.parentId) {
+        dragged.parentId = newParentId;
+        if (newParentId) {
+          const newParent = rects.find(r => r.id === newParentId);
+          if (newParent) expandParentForChild(newParent, dragged);
+        }
+        render();
+      }
+    }
+  }
+
   isDragging = false; dragInfo   = null;
   isResizing = false; resizeInfo = null;
 });
@@ -835,6 +1040,15 @@ function setupToolbar() {
   document.getElementById('btn-delete').addEventListener('click',          deleteSelected);
   document.getElementById('btn-save').addEventListener('click',            saveJSON);
   document.getElementById('btn-export-png').addEventListener('click',      exportPNG);
+
+  document.getElementById('btn-add-sub-rect').addEventListener('click', () => {
+    if (selectedType === 'rect') {
+      addSubRect(selectedId);
+    } else {
+      statusHint.textContent = 'Sélectionnez d\'abord un rectangle pour y ajouter un sous-rectangle.';
+      setTimeout(() => { statusHint.textContent = MODE_HINTS[mode] || ''; }, 3000);
+    }
+  });
 
   document.getElementById('btn-load').addEventListener('click', () =>
     document.getElementById('file-input').click()
