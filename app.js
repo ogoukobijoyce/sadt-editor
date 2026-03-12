@@ -417,14 +417,14 @@ function render() {
 
   drawGrid();
 
-  // Arrows below rects
-  for (const a of arrows)
-    drawArrow(a, selectedType === 'arrow' && a.id === selectedId);
-
   // Rectangles drawn in topological order: parents first, children on top
   const renderOrder = getRenderOrder();
   for (const r of renderOrder)
     drawRect(r, selectedType === 'rect' && r.id === selectedId);
+
+  // Arrows drawn on top of rectangles so they remain visible inside parent rects
+  for (const a of arrows)
+    drawArrow(a, selectedType === 'arrow' && a.id === selectedId);
 
   // Arrow-draw preview
   if (arrowDraw) {
