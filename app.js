@@ -17,6 +17,11 @@ const GRID_STEP       = 20;   // px
 const CHILD_PADDING   = 20;   // px – minimum gap between child and parent border
 const PARENT_LABEL_H  = 28;   // px – reserved height at top of parent for its label
 
+const LAYOUT_H_SPACING  = 80;   // px – horizontal gap between top-level rects during auto-layout
+const LAYOUT_V_SPACING  = 60;   // px – vertical gap between rows during auto-layout
+const LAYOUT_PADDING    = 80;   // px – canvas margin for the auto-layout grid origin
+const STATUS_MSG_DELAY  = 4000; // ms – how long transient status messages stay visible
+
 const ARROW_COLORS = {
   input:     '#2196F3',   // blue
   output:    '#4CAF50',   // green
@@ -34,7 +39,7 @@ const TYPE_LABELS = {
 };
 
 const MODE_HINTS = {
-  select:         'Cliquez pour sélectionner · Glissez pour déplacer · Bouton « Nommer » ou (N) pour nommer · Double-clic rect = renommer · Double-clic flèche = nom/virage · Clic droit sur virage = supprimer · Ctrl+S = sauvegarder · Ctrl+O = ouvrir',
+  select:         'Cliquez pour sélectionner · Glissez pour déplacer · Bouton « Nommer » ou (N) pour nommer · Double-clic rect = renommer · Double-clic flèche = nom/virage · Clic droit sur virage = supprimer · (L) = auto-aligner · Ctrl+S = sauvegarder · Ctrl+O = ouvrir',
   'add-rect':     'Cliquez sur le canvas pour placer un rectangle.',
   'add-arrow':    'Cliquez sur un bord de rectangle (ou n\'importe où) pour démarrer la flèche, puis cliquez pour terminer. Échap pour annuler.',
   'add-free-arrow': 'Cliquez pour démarrer la flèche libre, puis cliquez pour terminer. Échap pour annuler.',
@@ -732,6 +737,112 @@ function fitToView() {
   updateStatus();
 }
 
+// ─── Auto Layout ─────────────────────────────────────────────
+
+/**
+ * Automatically arrange all rectangles in a clean grid and straighten arrows.
+ * – Top-level rects are placed in rows of columns.
+ * – Children are centred inside their parent (horizontal row, below the header).
+ * – All arrow waypoints are removed; anchor t-values are reset to 0.5 (centre of side).
+ * – fitToView() is called at the end so the result is immediately visible.
+ */
+function autoLayout() {
+  if (rects.length === 0 && arrows.length === 0) return;
+
+  /** Is a rect truly at the top level (no valid parent)? */
+  function isTopLevel(r) {
+    return !r.parentId || !rects.find(p => p.id === r.parentId);
+  }
+
+  const topLevel = rects.filter(isTopLevel);
+
+  // ── Phase 1: compute intrinsic sizes, bottom-up ──────────────
+  function computeSize(rect) {
+    const children = rects.filter(r => r.parentId === rect.id);
+    if (children.length === 0) {
+      rect.width  = RECT_W_DEFAULT;
+      rect.height = RECT_H_DEFAULT;
+      return;
+    }
+    for (const child of children) computeSize(child);
+
+    const n           = children.length;
+    const maxChildH   = Math.max(...children.map(c => c.height));
+    const totalChildW = children.reduce((s, c) => s + c.width, 0) + (n - 1) * CHILD_PADDING;
+    rect.width  = Math.max(RECT_W_DEFAULT, totalChildW + 2 * CHILD_PADDING);
+    rect.height = Math.max(RECT_H_DEFAULT, maxChildH + PARENT_LABEL_H + 3 * CHILD_PADDING);
+  }
+
+  for (const r of topLevel) computeSize(r);
+
+  // ── Phase 2: assign positions, top-down ──────────────────────
+  function placeChildren(parent) {
+    const children = rects.filter(r => r.parentId === parent.id);
+    if (children.length === 0) return;
+
+    const n           = children.length;
+    const totalChildW = children.reduce((s, c) => s + c.width, 0) + (n - 1) * CHILD_PADDING;
+    let   curX        = parent.x + Math.round((parent.width - totalChildW) / 2);
+    const childY      = parent.y + PARENT_LABEL_H + CHILD_PADDING;
+
+    for (const child of children) {
+      child.x = curX;
+      child.y = childY;
+      curX   += child.width + CHILD_PADDING;
+      placeChildren(child);   // recurse into nested children
+    }
+  }
+
+  // Place top-level rects in a grid (ceil(sqrt(n)) columns)
+  const cols      = Math.max(1, Math.ceil(Math.sqrt(topLevel.length)));
+  let rowStartX   = LAYOUT_PADDING;
+  let rowStartY   = LAYOUT_PADDING;
+  let maxRowH     = 0;
+  let colIdx      = 0;
+
+  for (const r of topLevel) {
+    if (colIdx === cols) {
+      rowStartY += maxRowH + LAYOUT_V_SPACING;
+      rowStartX  = LAYOUT_PADDING;
+      maxRowH    = 0;
+      colIdx     = 0;
+    }
+    r.x = rowStartX;
+    r.y = rowStartY;
+    placeChildren(r);
+    rowStartX += r.width + LAYOUT_H_SPACING;
+    maxRowH    = Math.max(maxRowH, r.height);
+    colIdx++;
+  }
+
+  // ── Phase 3: straighten arrows ───────────────────────────────
+  for (const a of arrows) {
+    a.waypoints = [];
+    if (a.startAnchor) a.startAnchor = { side: a.startAnchor.side, t: 0.5 };
+    if (a.endAnchor)   a.endAnchor   = { side: a.endAnchor.side,   t: 0.5 };
+  }
+
+  selectedId = selectedType = null;
+  fitToView();
+}
+
+/**
+ * Triggered by the "Terminer le SADT" button.
+ * Shows a confirmation dialog, then runs autoLayout().
+ */
+function finishSADT() {
+  const ok = confirm(
+    'Voulez-vous aligner automatiquement les éléments de votre diagramme SADT ?\n\n' +
+    '• Les rectangles et sous-rectangles seront réorganisés proprement.\n' +
+    '• Les flèches seront redressées (virages supprimés).\n' +
+    '• La vue sera ajustée au contenu.'
+  );
+  if (!ok) return;
+  autoLayout();
+  statusHint.textContent = '✅ Diagramme aligné automatiquement !';
+  setTimeout(() => { if (statusHint.textContent.startsWith('✅')) statusHint.textContent = MODE_HINTS[mode] || ''; }, STATUS_MSG_DELAY);
+}
+
 // ─── Nested-rectangle helpers ────────────────────────────────
 
 /** Recursively collect ids of all descendants of a rect. */
@@ -1246,6 +1357,7 @@ document.addEventListener('keydown', e => {
     case 'f': case 'F': setMode('add-free-arrow'); break;
     case 'n': case 'N': renameSelected(); break;
     case 'v': case 'V': fitToView(); break;
+    case 'l': case 'L': autoLayout(); break;
   }
 });
 
@@ -1259,6 +1371,8 @@ function setupToolbar() {
   document.getElementById('btn-rename').addEventListener('click',          renameSelected);
   document.getElementById('btn-delete').addEventListener('click',          deleteSelected);
   document.getElementById('btn-fit-view').addEventListener('click',        fitToView);
+  document.getElementById('btn-auto-layout').addEventListener('click',     autoLayout);
+  document.getElementById('btn-finish-sadt').addEventListener('click',     finishSADT);
   document.getElementById('btn-save').addEventListener('click',            saveJSON);
   document.getElementById('btn-export-png').addEventListener('click',      exportPNG);
 
