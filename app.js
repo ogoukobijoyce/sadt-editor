@@ -850,25 +850,118 @@ function autoLayout() {
 
   const topLevel = rects.filter(isTopLevel);
 
-  // ── Phase 1: compute sizes to fit existing children, bottom-up ───────────
-  // Children keep their current sizes; parents resize to encompass them.
+  // ── Phase 1: compute intrinsic sizes, bottom-up ──────────────────────────
+
+  /** Grow a leaf rectangle so its label fits without clipping. */
+  function autoSizeRect(rect) {
+    const label     = rect.label || 'Fonction';
+    const savedFont = ctx.font;
+    ctx.font        = 'bold 14px Arial, sans-serif';
+
+    const H_PAD  = 16;  // horizontal inner padding (each side)
+    const V_PAD  = 12;  // vertical inner padding (each side)
+    const LINE_H = 18;  // px per text line
+
+    // Wrap at the current (or minimum) interior width
+    const measureW = Math.max(rect.width - 2 * H_PAD, RECT_W_DEFAULT - 2 * H_PAD);
+    const lines    = wrapText(label, measureW);
+
+    // Width needed to display the longest line without wrapping
+    const maxLineW = lines.length > 0 ? Math.max(...lines.map(l => ctx.measureText(l).width)) : 0;
+    const reqW     = maxLineW + 2 * H_PAD;
+
+    // Height needed for all wrapped lines
+    const reqH = lines.length * LINE_H + 2 * V_PAD;
+
+    ctx.font = savedFont;
+
+    // Grow only — never shrink below the current size or the default
+    rect.width  = Math.max(rect.width,  reqW,  RECT_W_DEFAULT);
+    rect.height = Math.max(rect.height, reqH,  RECT_H_DEFAULT);
+  }
+
+  /** Return true when at least two children overlap (with a CHILD_PADDING/2 margin). */
+  function childrenOverlap(children) {
+    const margin = CHILD_PADDING / 2;
+    for (let i = 0; i < children.length; i++) {
+      for (let j = i + 1; j < children.length; j++) {
+        const a = children[i], b = children[j];
+        if (a.x - margin < b.x + b.width  + margin &&
+            a.x + a.width  + margin > b.x - margin &&
+            a.y - margin < b.y + b.height + margin &&
+            a.y + a.height + margin > b.y - margin) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Redistribute children in a grid inside parent:
+   *   1 column  for 1–2 children
+   *   2 columns for 3–4 children
+   *   3 columns for 5+ children
+   * Starting position: parent.x + CHILD_PADDING, parent.y + PARENT_LABEL_H + CHILD_PADDING
+   */
+  function redistributeChildren(parent, children) {
+    const n    = children.length;
+    const cols = n <= 2 ? 1 : n <= 4 ? 2 : 3;
+
+    let curX = parent.x + CHILD_PADDING;
+    let curY = parent.y + PARENT_LABEL_H + CHILD_PADDING;
+    let col  = 0;
+    let rowH = 0;
+
+    for (const child of children) {
+      const dx = curX - child.x;
+      const dy = curY - child.y;
+      child.x  = curX;
+      child.y  = curY;
+      moveChildren(child.id, dx, dy);   // keep descendants in sync
+
+      rowH = Math.max(rowH, child.height);
+      col++;
+      if (col === cols) {
+        curX  = parent.x + CHILD_PADDING;
+        curY += rowH + CHILD_PADDING;
+        rowH  = 0;
+        col   = 0;
+      } else {
+        curX += child.width + CHILD_PADDING;
+      }
+    }
+  }
+
+  /** Recursively compute sizes bottom-up, auto-sizing leaves and redistributing
+   *  children when they overlap or intrude on the parent's label area. */
   function computeSize(rect) {
     const children = rects.filter(r => r.parentId === rect.id);
     if (children.length === 0) {
-      // Leaf rect: enforce minimum size, but don't shrink below current size
-      rect.width  = Math.max(rect.width,  RECT_W_DEFAULT);
-      rect.height = Math.max(rect.height, RECT_H_DEFAULT);
+      // Leaf rect: grow to fit label, then enforce minimum size
+      autoSizeRect(rect);
       return;
     }
 
     for (const child of children) computeSize(child);
 
-    // Determine required parent size from children's relative positions
+    // Redistribute if children overlap or any child intrudes on the label strip
+    const needsRelayout = childrenOverlap(children) ||
+      children.some(c => c.y < rect.y + PARENT_LABEL_H + CHILD_PADDING);
+    if (needsRelayout) {
+      redistributeChildren(rect, children);
+    }
+
+    // Determine required parent size from children's (possibly new) positions
     const relRight  = Math.max(...children.map(c => (c.x - rect.x) + c.width));
     const relBottom = Math.max(...children.map(c => (c.y - rect.y) + c.height));
 
+    // Minimum height must fit the label header + at least one row of children
+    const maxChildH = children.length > 0 ? Math.max(...children.map(c => c.height)) : 0;
+    const minHeight = PARENT_LABEL_H + CHILD_PADDING + maxChildH + CHILD_PADDING;
+
     rect.width  = Math.max(rect.width,  relRight  + CHILD_PADDING);
-    rect.height = Math.max(rect.height, relBottom + CHILD_PADDING);
+    rect.height = Math.max(rect.height, relBottom + CHILD_PADDING, minHeight);
   }
 
   for (const r of topLevel) computeSize(r);
