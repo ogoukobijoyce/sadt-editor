@@ -21,6 +21,8 @@ const LAYOUT_H_SPACING  = 100;  // px – horizontal gap between top-level rects
 const LAYOUT_V_SPACING  = 80;   // px – vertical gap between rows during auto-layout
 const LAYOUT_PADDING    = 80;   // px – canvas margin for the auto-layout grid origin
 const STATUS_MSG_DELAY  = 4000; // ms – how long transient status messages stay visible
+const COORD_EPSILON     = 1;    // px – near-zero threshold for collinear/identical coordinate checks
+const MAX_OBSTACLE_ITER = 10;   // maximum iterations for obstacle-avoidance loop
 
 const ARROW_COLORS = {
   input:     '#2196F3',   // blue
@@ -815,20 +817,161 @@ function computeOrthogonalWaypoints(x1, y1, side1, x2, y2, side2) {
 /**
  * Route all arrows with orthogonal (right-angle) paths for better readability.
  * Each arrow gets waypoints to create an elbow / Z-shaped path.
- * Anchors are reset to the centre of their respective sides (t = 0.5).
+ * Anchors are first reset to the centre of their respective sides (t = 0.5),
+ * then redistributed uniformly so that multiple arrows on the same side of a
+ * rectangle are spread out instead of stacked at the centre.
  */
 function routeArrowsOrthogonal() {
+  // ── Step 1: reset all anchors to the centre of their side ────────────────
   for (const a of arrows) {
-    // Reset anchors to the centre of their side
     if (a.startAnchor) a.startAnchor = { side: a.startAnchor.side, t: 0.5 };
     if (a.endAnchor)   a.endAnchor   = { side: a.endAnchor.side,   t: 0.5 };
+  }
 
+  // ── Step 2: redistribute anchors uniformly per (rect, side) ─────────────
+  // Build a map: rectId → side → [ {arrow, role} ] where role is 'start'|'end'
+  const sideMap = new Map(); // key: `${rectId}:${side}`
+  for (const a of arrows) {
+    if (a.startRectId && a.startAnchor) {
+      const key = `${a.startRectId}:${a.startAnchor.side}`;
+      if (!sideMap.has(key)) sideMap.set(key, []);
+      sideMap.get(key).push({ arrow: a, role: 'start' });
+    }
+    if (a.endRectId && a.endAnchor) {
+      const key = `${a.endRectId}:${a.endAnchor.side}`;
+      if (!sideMap.has(key)) sideMap.set(key, []);
+      sideMap.get(key).push({ arrow: a, role: 'end' });
+    }
+  }
+  // Assign evenly-spaced t values: t = (i+1) / (count+1)
+  for (const entries of sideMap.values()) {
+    const count = entries.length;
+    entries.forEach(({ arrow, role }, i) => {
+      const t = (i + 1) / (count + 1);
+      if (role === 'start') arrow.startAnchor = { side: arrow.startAnchor.side, t };
+      else                  arrow.endAnchor   = { side: arrow.endAnchor.side,   t };
+    });
+  }
+
+  // ── Step 3: compute orthogonal waypoints for every arrow ─────────────────
+  for (const a of arrows) {
     const { x1, y1, x2, y2 } = getArrowEndpoints(a);
     const side1 = a.startAnchor ? a.startAnchor.side : null;
     const side2 = a.endAnchor   ? a.endAnchor.side   : null;
 
-    a.waypoints = computeOrthogonalWaypoints(x1, y1, side1, x2, y2, side2);
+    let waypoints = computeOrthogonalWaypoints(x1, y1, side1, x2, y2, side2);
+
+    // ── Step 4: avoid crossing other rectangles ───────────────────────────
+    waypoints = avoidRectObstacles(waypoints, x1, y1, x2, y2,
+                                   a.startRectId, a.endRectId);
+
+    a.waypoints = waypoints;
   }
+}
+
+/**
+ * Check whether a segment (px,py)→(qx,qy) intersects axis-aligned rectangle r.
+ * Returns true if the segment passes through the interior of r.
+ */
+function segmentIntersectsRect(px, py, qx, qy, r) {
+  // Use a simple parametric clip (Cohen–Sutherland–like) against the rect AABB.
+  const minX = r.x, maxX = r.x + r.width;
+  const minY = r.y, maxY = r.y + r.height;
+
+  // Horizontal segment
+  if (Math.abs(py - qy) < COORD_EPSILON) {
+    if (py <= minY || py >= maxY) return false;
+    const lo = Math.min(px, qx), hi = Math.max(px, qx);
+    return lo < maxX && hi > minX;
+  }
+  // Vertical segment
+  if (Math.abs(px - qx) < COORD_EPSILON) {
+    if (px <= minX || px >= maxX) return false;
+    const lo = Math.min(py, qy), hi = Math.max(py, qy);
+    return lo < maxY && hi > minY;
+  }
+  // Diagonal – use Liang-Barsky
+  const dx = qx - px, dy = qy - py;
+  let tMin = 0, tMax = 1;
+  const checks = [
+    [-dx, px - minX],
+    [ dx, maxX - px],
+    [-dy, py - minY],
+    [ dy, maxY - py],
+  ];
+  for (const [p, q] of checks) {
+    if (p === 0) { if (q < 0) return false; }
+    else {
+      const t = q / p;
+      if (p < 0) tMin = Math.max(tMin, t);
+      else       tMax = Math.min(tMax, t);
+    }
+    if (tMin > tMax) return false;
+  }
+  return true;
+}
+
+/**
+ * Post-process an orthogonal waypoint list so that no segment passes through
+ * a rectangle other than the arrow's own start/end rectangles.
+ * When a crossing is detected a simple detour is inserted that passes outside
+ * the blocking rectangle with a CHILD_PADDING margin.
+ */
+function avoidRectObstacles(waypoints, x1, y1, x2, y2, startRectId, endRectId) {
+  const margin = CHILD_PADDING;
+  // Build the full point list (start + waypoints + end)
+  let pts = [{ x: x1, y: y1 }, ...waypoints, { x: x2, y: y2 }];
+
+  // Candidate obstacle rectangles (exclude the arrow's own endpoints)
+  const obstacles = rects.filter(r => r.id !== startRectId && r.id !== endRectId);
+  if (obstacles.length === 0) return waypoints;
+
+  let changed = true;
+  let iterations = 0;
+  while (changed && iterations < MAX_OBSTACLE_ITER) {
+    changed = false;
+    iterations++;
+    const newPts = [pts[0]];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p = pts[i], q = pts[i + 1];
+      let blocked = null;
+      for (const r of obstacles) {
+        if (segmentIntersectsRect(p.x, p.y, q.x, q.y, r)) { blocked = r; break; }
+      }
+      if (!blocked) {
+        newPts.push(q);
+        continue;
+      }
+      changed = true;
+      // Determine detour: go around the blocking rectangle
+      const rLeft   = blocked.x - margin;
+      const rRight  = blocked.x + blocked.width  + margin;
+      const rTop    = blocked.y - margin;
+      const rBottom = blocked.y + blocked.height + margin;
+
+      // For a horizontal segment, detour above or below
+      if (Math.abs(p.y - q.y) < COORD_EPSILON) {
+        // Choose side closer to current y
+        const detourY = (Math.abs(p.y - rTop) < Math.abs(p.y - rBottom)) ? rTop : rBottom;
+        newPts.push({ x: p.x, y: detourY });
+        newPts.push({ x: q.x, y: detourY });
+        newPts.push(q);
+      } else if (Math.abs(p.x - q.x) < COORD_EPSILON) {
+        // For a vertical segment, detour left or right
+        const detourX = (Math.abs(p.x - rLeft) < Math.abs(p.x - rRight)) ? rLeft : rRight;
+        newPts.push({ x: detourX, y: p.y });
+        newPts.push({ x: detourX, y: q.y });
+        newPts.push(q);
+      } else {
+        // Diagonal (shouldn't happen in orthogonal routing, but handle gracefully)
+        newPts.push(q);
+      }
+    }
+    pts = newPts;
+  }
+
+  // Return only the interior waypoints (strip start/end)
+  return pts.slice(1, pts.length - 1);
 }
 
 /**
@@ -968,6 +1111,16 @@ function autoLayout() {
 
   // ── Phase 2: assign positions for top-level rects only ───────────────────
   // Children are moved by the same delta as their parent (relative positions preserved).
+
+  // Capture bounding box BEFORE repositioning so free arrows can follow the shift.
+  let bboxBeforeMinX = Infinity, bboxBeforeMinY = Infinity;
+  for (const r of rects) {
+    if (r.x < bboxBeforeMinX) bboxBeforeMinX = r.x;
+    if (r.y < bboxBeforeMinY) bboxBeforeMinY = r.y;
+  }
+  if (!isFinite(bboxBeforeMinX)) bboxBeforeMinX = 0;
+  if (!isFinite(bboxBeforeMinY)) bboxBeforeMinY = 0;
+
   const cols      = topLevel.length <= 6
     ? topLevel.length
     : Math.max(1, Math.ceil(Math.sqrt(topLevel.length)));
@@ -992,6 +1145,31 @@ function autoLayout() {
     rowStartX += r.width + LAYOUT_H_SPACING;
     maxRowH    = Math.max(maxRowH, r.height);
     colIdx++;
+  }
+
+  // Capture bounding box AFTER repositioning to compute the global shift.
+  let bboxAfterMinX = Infinity, bboxAfterMinY = Infinity;
+  for (const r of rects) {
+    if (r.x < bboxAfterMinX) bboxAfterMinX = r.x;
+    if (r.y < bboxAfterMinY) bboxAfterMinY = r.y;
+  }
+  if (!isFinite(bboxAfterMinX)) bboxAfterMinX = 0;
+  if (!isFinite(bboxAfterMinY)) bboxAfterMinY = 0;
+
+  const globalDx = bboxAfterMinX - bboxBeforeMinX;
+  const globalDy = bboxAfterMinY - bboxBeforeMinY;
+
+  // Shift free-arrow endpoints (those not attached to any rectangle) by the
+  // same global offset so they stay in the same relative position in the diagram.
+  for (const a of arrows) {
+    if (!a.startRectId) {
+      a.startX += globalDx;
+      a.startY += globalDy;
+    }
+    if (!a.endRectId) {
+      a.endX += globalDx;
+      a.endY += globalDy;
+    }
   }
 
   // ── Phase 3: route arrows with orthogonal (right-angle) paths ────────────
