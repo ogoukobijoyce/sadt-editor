@@ -39,7 +39,7 @@ const TYPE_LABELS = {
 };
 
 const MODE_HINTS = {
-  select:         'Cliquez pour sélectionner · Glissez pour déplacer · Bouton « Nommer » ou (N) pour nommer · Double-clic rect = renommer · Double-clic flèche = nom/virage · Clic droit sur virage = supprimer · (L) = auto-aligner · Ctrl+S = sauvegarder · Ctrl+O = ouvrir',
+  select:         'Cliquez pour sélectionner · Glissez pour déplacer · Bouton « Nommer » ou (N) pour nommer · Double-clic rect = renommer · Double-clic flèche = nom/virage · Clic droit sur virage = supprimer · (L) = auto-aligner · (Q) = aligner flèches · Ctrl+S = sauvegarder · Ctrl+O = ouvrir',
   'add-rect':     'Cliquez sur le canvas pour placer un rectangle.',
   'add-arrow':    'Cliquez sur un bord de rectangle (ou n\'importe où) pour démarrer la flèche, puis cliquez pour terminer. Échap pour annuler.',
   'add-free-arrow': 'Cliquez pour démarrer la flèche libre, puis cliquez pour terminer. Échap pour annuler.',
@@ -145,35 +145,34 @@ function getArrowPoints(arrow) {
   return pts;
 }
 
-/** Compute the label position beside an arrow (offset perpendicular to the middle segment). */
+/** Compute the label position beside an arrow.
+ *  For orthogonal arrows (with waypoints) place the label along the longest
+ *  segment; for diagonal / free arrows use the midpoint with perpendicular offset. */
 function getArrowLabelPos(arrow) {
   const pts = getArrowPoints(arrow);
-  // Find the total length and walk to the midpoint
-  let totalLen = 0;
+  if (pts.length < 2) return { x: 0, y: 0 };
+
+  // Find the longest segment to place the label there (most readable)
+  let bestIdx = 0, bestLen = 0;
   const segLens = [];
   for (let i = 0; i < pts.length - 1; i++) {
     const l = Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
     segLens.push(l);
-    totalLen += l;
+    if (l > bestLen) { bestLen = l; bestIdx = i; }
   }
-  let remaining = totalLen / 2;
-  let mx = pts[0].x, my = pts[0].y, dx = 0, dy = 0, segLen = 1;
-  for (let i = 0; i < pts.length - 1; i++) {
-    if (remaining <= segLens[i] || i === pts.length - 2) {
-      const t = segLens[i] > 0 ? remaining / segLens[i] : 0;
-      mx     = pts[i].x + t * (pts[i + 1].x - pts[i].x);
-      my     = pts[i].y + t * (pts[i + 1].y - pts[i].y);
-      dx     = pts[i + 1].x - pts[i].x;
-      dy     = pts[i + 1].y - pts[i].y;
-      segLen = segLens[i] || 1;
-      break;
-    }
-    remaining -= segLens[i];
-  }
-  // Perpendicular offset (clockwise 90°)
+
+  // Midpoint and direction of the chosen segment
+  const p0 = pts[bestIdx], p1 = pts[bestIdx + 1];
+  const mx = (p0.x + p1.x) / 2;
+  const my = (p0.y + p1.y) / 2;
+  const dx = p1.x - p0.x;
+  const dy = p1.y - p0.y;
+  const segLen = segLens[bestIdx] || 1;
+
+  // Perpendicular offset (clockwise 90°) – 18 px to keep label clear of the line
   const nx = dy / segLen;
   const ny = -dx / segLen;
-  return { x: mx + nx * 20, y: my + ny * 20 };
+  return { x: mx + nx * 18, y: my + ny * 18 };
 }
 
 /** Find nearest rect border point within SNAP_RADIUS.
@@ -748,10 +747,97 @@ function fitToView() {
 // ─── Auto Layout ─────────────────────────────────────────────
 
 /**
- * Automatically arrange all rectangles in a clean grid and straighten arrows.
+ * Compute orthogonal waypoints that form an elbow/Z-shaped path between two
+ * anchor points, based on which sides the arrow connects from/to.
+ *
+ * @param {number} x1 - Start X
+ * @param {number} y1 - Start Y
+ * @param {string|null} side1 - Start side ('left'|'right'|'top'|'bottom'|null)
+ * @param {number} x2 - End X
+ * @param {number} y2 - End Y
+ * @param {string|null} side2 - End side
+ * @returns {Array<{x,y}>} Waypoints to insert between start and end
+ */
+function computeOrthogonalWaypoints(x1, y1, side1, x2, y2, side2) {
+  // If endpoints are practically at the same position, no waypoints needed
+  if (Math.abs(x1 - x2) < 2 && Math.abs(y1 - y2) < 2) return [];
+
+  const hSides = new Set(['left', 'right']);
+  const vSides = new Set(['top', 'bottom']);
+
+  // Both horizontal exits (left/right ↔ left/right): Z-shape via vertical midpoint
+  if (hSides.has(side1) && hSides.has(side2)) {
+    const midX = Math.round((x1 + x2) / 2);
+    if (Math.abs(y1 - y2) < 2) return [];   // already horizontal, no bend needed
+    return [{ x: midX, y: y1 }, { x: midX, y: y2 }];
+  }
+
+  // Both vertical exits (top/bottom ↔ top/bottom): Z-shape via horizontal midpoint
+  if (vSides.has(side1) && vSides.has(side2)) {
+    const midY = Math.round((y1 + y2) / 2);
+    if (Math.abs(x1 - x2) < 2) return [];
+    return [{ x: x1, y: midY }, { x: x2, y: midY }];
+  }
+
+  // Mixed: horizontal start, vertical end → single corner
+  if (hSides.has(side1) && vSides.has(side2)) {
+    return [{ x: x2, y: y1 }];
+  }
+
+  // Mixed: vertical start, horizontal end → single corner
+  if (vSides.has(side1) && hSides.has(side2)) {
+    return [{ x: x1, y: y2 }];
+  }
+
+  // One side known, the other is a free endpoint: create an L-shape
+  if (hSides.has(side1) && !side2) {
+    // Exits horizontally, then turns to reach free endpoint
+    if (Math.abs(y1 - y2) < 2) return [];
+    return [{ x: x2, y: y1 }];
+  }
+  if (vSides.has(side1) && !side2) {
+    // Exits vertically, then turns to reach free endpoint
+    if (Math.abs(x1 - x2) < 2) return [];
+    return [{ x: x1, y: y2 }];
+  }
+  if (!side1 && hSides.has(side2)) {
+    if (Math.abs(y1 - y2) < 2) return [];
+    return [{ x: x1, y: y2 }];
+  }
+  if (!side1 && vSides.has(side2)) {
+    if (Math.abs(x1 - x2) < 2) return [];
+    return [{ x: x2, y: y1 }];
+  }
+
+  return [];
+}
+
+/**
+ * Route all arrows with orthogonal (right-angle) paths for better readability.
+ * Each arrow gets waypoints to create an elbow / Z-shaped path.
+ * Anchors are reset to the centre of their respective sides (t = 0.5).
+ */
+function routeArrowsOrthogonal() {
+  for (const a of arrows) {
+    // Reset anchors to the centre of their side
+    if (a.startAnchor) a.startAnchor = { side: a.startAnchor.side, t: 0.5 };
+    if (a.endAnchor)   a.endAnchor   = { side: a.endAnchor.side,   t: 0.5 };
+
+    const { x1, y1, x2, y2 } = getArrowEndpoints(a);
+    const side1 = a.startAnchor ? a.startAnchor.side : null;
+    const side2 = a.endAnchor   ? a.endAnchor.side   : null;
+
+    a.waypoints = computeOrthogonalWaypoints(x1, y1, side1, x2, y2, side2);
+  }
+}
+
+/**
+ * Automatically arrange all rectangles in a clean grid and route arrows orthogonally.
  * – Top-level rects are placed in rows of columns.
- * – Children are centred inside their parent (horizontal row, below the header).
- * – All arrow waypoints are removed; anchor t-values are reset to 0.5 (centre of side).
+ * – Sub-rectangles (children) keep their positions RELATIVE to their parent,
+ *   so the user's manual layout inside each parent is preserved.
+ * – Parent sizes are recomputed to encompass all their children.
+ * – Arrows are routed with right-angle elbow paths (orthogonal routing).
  * – fitToView() is called at the end so the result is immediately visible.
  */
 function autoLayout() {
@@ -764,45 +850,124 @@ function autoLayout() {
 
   const topLevel = rects.filter(isTopLevel);
 
-  // ── Phase 1: compute intrinsic sizes, bottom-up ──────────────
+  // ── Phase 1: compute intrinsic sizes, bottom-up ──────────────────────────
+
+  /** Grow a leaf rectangle so its label fits without clipping. */
+  function autoSizeRect(rect) {
+    const label     = rect.label || 'Fonction';
+    const savedFont = ctx.font;
+    ctx.font        = 'bold 14px Arial, sans-serif';
+
+    const H_PAD  = 16;  // horizontal inner padding (each side)
+    const V_PAD  = 12;  // vertical inner padding (each side)
+    const LINE_H = 18;  // px per text line
+
+    // Wrap at the current (or minimum) interior width
+    const measureW = Math.max(rect.width - 2 * H_PAD, RECT_W_DEFAULT - 2 * H_PAD);
+    const lines    = wrapText(label, measureW);
+
+    // Width needed to display the longest line without wrapping
+    const maxLineW = lines.length > 0 ? Math.max(...lines.map(l => ctx.measureText(l).width)) : 0;
+    const reqW     = maxLineW + 2 * H_PAD;
+
+    // Height needed for all wrapped lines
+    const reqH = lines.length * LINE_H + 2 * V_PAD;
+
+    ctx.font = savedFont;
+
+    // Grow only — never shrink below the current size or the default
+    rect.width  = Math.max(rect.width,  reqW,  RECT_W_DEFAULT);
+    rect.height = Math.max(rect.height, reqH,  RECT_H_DEFAULT);
+  }
+
+  /** Return true when at least two children overlap (with a CHILD_PADDING/2 margin). */
+  function childrenOverlap(children) {
+    const margin = CHILD_PADDING / 2;
+    for (let i = 0; i < children.length; i++) {
+      for (let j = i + 1; j < children.length; j++) {
+        const a = children[i], b = children[j];
+        if (a.x - margin < b.x + b.width  + margin &&
+            a.x + a.width  + margin > b.x - margin &&
+            a.y - margin < b.y + b.height + margin &&
+            a.y + a.height + margin > b.y - margin) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Redistribute children in a grid inside parent:
+   *   1 column  for 1–2 children
+   *   2 columns for 3–4 children
+   *   3 columns for 5+ children
+   * Starting position: parent.x + CHILD_PADDING, parent.y + PARENT_LABEL_H + CHILD_PADDING
+   */
+  function redistributeChildren(parent, children) {
+    const n    = children.length;
+    const cols = n <= 2 ? 1 : n <= 4 ? 2 : 3;
+
+    let curX = parent.x + CHILD_PADDING;
+    let curY = parent.y + PARENT_LABEL_H + CHILD_PADDING;
+    let col  = 0;
+    let rowH = 0;
+
+    for (const child of children) {
+      const dx = curX - child.x;
+      const dy = curY - child.y;
+      child.x  = curX;
+      child.y  = curY;
+      moveChildren(child.id, dx, dy);   // keep descendants in sync
+
+      rowH = Math.max(rowH, child.height);
+      col++;
+      if (col === cols) {
+        curX  = parent.x + CHILD_PADDING;
+        curY += rowH + CHILD_PADDING;
+        rowH  = 0;
+        col   = 0;
+      } else {
+        curX += child.width + CHILD_PADDING;
+      }
+    }
+  }
+
+  /** Recursively compute sizes bottom-up, auto-sizing leaves and redistributing
+   *  children when they overlap or intrude on the parent's label area. */
   function computeSize(rect) {
     const children = rects.filter(r => r.parentId === rect.id);
     if (children.length === 0) {
-      rect.width  = RECT_W_DEFAULT;
-      rect.height = RECT_H_DEFAULT;
+      // Leaf rect: grow to fit label, then enforce minimum size
+      autoSizeRect(rect);
       return;
     }
+
     for (const child of children) computeSize(child);
 
-    const n           = children.length;
-    const maxChildH   = Math.max(...children.map(c => c.height));
-    const totalChildW = children.reduce((s, c) => s + c.width, 0) + (n - 1) * CHILD_PADDING;
-    rect.width  = Math.max(RECT_W_DEFAULT, totalChildW + 2 * CHILD_PADDING);
-    rect.height = Math.max(RECT_H_DEFAULT, maxChildH + PARENT_LABEL_H + 3 * CHILD_PADDING);
+    // Redistribute if children overlap or any child intrudes on the label strip
+    const needsRelayout = childrenOverlap(children) ||
+      children.some(c => c.y < rect.y + PARENT_LABEL_H + CHILD_PADDING);
+    if (needsRelayout) {
+      redistributeChildren(rect, children);
+    }
+
+    // Determine required parent size from children's (possibly new) positions
+    const relRight  = Math.max(...children.map(c => (c.x - rect.x) + c.width));
+    const relBottom = Math.max(...children.map(c => (c.y - rect.y) + c.height));
+
+    // Minimum height must fit the label header + at least one row of children
+    const maxChildH = children.length > 0 ? Math.max(...children.map(c => c.height)) : 0;
+    const minHeight = PARENT_LABEL_H + CHILD_PADDING + maxChildH + CHILD_PADDING;
+
+    rect.width  = Math.max(rect.width,  relRight  + CHILD_PADDING);
+    rect.height = Math.max(rect.height, relBottom + CHILD_PADDING, minHeight);
   }
 
   for (const r of topLevel) computeSize(r);
 
-  // ── Phase 2: assign positions, top-down ──────────────────────
-  function placeChildren(parent) {
-    const children = rects.filter(r => r.parentId === parent.id);
-    if (children.length === 0) return;
-
-    const n           = children.length;
-    const totalChildW = children.reduce((s, c) => s + c.width, 0) + (n - 1) * CHILD_PADDING;
-    let   curX        = parent.x + Math.round((parent.width - totalChildW) / 2);
-    const childY      = parent.y + PARENT_LABEL_H + CHILD_PADDING;
-
-    for (const child of children) {
-      child.x = curX;
-      child.y = childY;
-      curX   += child.width + CHILD_PADDING;
-      placeChildren(child);   // recurse into nested children
-    }
-  }
-
-  // Place top-level rects in a grid.
-  // For ≤ 6 rects (typical SADT diagram) use a single row; otherwise use a square-ish grid.
+  // ── Phase 2: assign positions for top-level rects only ───────────────────
+  // Children are moved by the same delta as their parent (relative positions preserved).
   const cols      = topLevel.length <= 6
     ? topLevel.length
     : Math.max(1, Math.ceil(Math.sqrt(topLevel.length)));
@@ -818,20 +983,19 @@ function autoLayout() {
       maxRowH    = 0;
       colIdx     = 0;
     }
+    const dx = rowStartX - r.x;
+    const dy = rowStartY - r.y;
     r.x = rowStartX;
     r.y = rowStartY;
-    placeChildren(r);
+    // Move all children by the same delta so relative positions are preserved
+    moveChildren(r.id, dx, dy);
     rowStartX += r.width + LAYOUT_H_SPACING;
     maxRowH    = Math.max(maxRowH, r.height);
     colIdx++;
   }
 
-  // ── Phase 3: straighten arrows ───────────────────────────────
-  for (const a of arrows) {
-    a.waypoints = [];
-    if (a.startAnchor) a.startAnchor = { side: a.startAnchor.side, t: 0.5 };
-    if (a.endAnchor)   a.endAnchor   = { side: a.endAnchor.side,   t: 0.5 };
-  }
+  // ── Phase 3: route arrows with orthogonal (right-angle) paths ────────────
+  routeArrowsOrthogonal();
 
   selectedId = selectedType = null;
   fitToView();
@@ -844,13 +1008,26 @@ function autoLayout() {
 function finishSADT() {
   const ok = confirm(
     'Voulez-vous aligner automatiquement les éléments de votre diagramme SADT ?\n\n' +
-    '• Les rectangles et sous-rectangles seront réorganisés proprement.\n' +
-    '• Les flèches seront redressées (virages supprimés).\n' +
+    '• Les rectangles de premier niveau seront réorganisés en grille.\n' +
+    '• Les sous-rectangles conservent leur position relative dans leur parent.\n' +
+    '• Les flèches seront routées en angles droits pour plus de lisibilité.\n' +
     '• La vue sera ajustée au contenu.'
   );
   if (!ok) return;
   autoLayout();
   statusHint.textContent = '✅ Diagramme aligné automatiquement !';
+  setTimeout(() => { if (statusHint.textContent.startsWith('✅')) statusHint.textContent = MODE_HINTS[mode] || ''; }, STATUS_MSG_DELAY);
+}
+
+/**
+ * Route all arrows orthogonally without moving any rectangles.
+ * Useful to tidy up arrows after manually positioning elements.
+ */
+function alignArrowsOnly() {
+  if (arrows.length === 0) return;
+  routeArrowsOrthogonal();
+  render();
+  statusHint.textContent = '✅ Flèches alignées en angles droits !';
   setTimeout(() => { if (statusHint.textContent.startsWith('✅')) statusHint.textContent = MODE_HINTS[mode] || ''; }, STATUS_MSG_DELAY);
 }
 
@@ -1369,6 +1546,7 @@ document.addEventListener('keydown', e => {
     case 'n': case 'N': renameSelected(); break;
     case 'v': case 'V': fitToView(); break;
     case 'l': case 'L': autoLayout(); break;
+    case 'q': case 'Q': alignArrowsOnly(); break;
   }
 });
 
@@ -1383,6 +1561,7 @@ function setupToolbar() {
   document.getElementById('btn-delete').addEventListener('click',          deleteSelected);
   document.getElementById('btn-fit-view').addEventListener('click',        fitToView);
   document.getElementById('btn-auto-layout').addEventListener('click',     autoLayout);
+  document.getElementById('btn-align-arrows').addEventListener('click',    alignArrowsOnly);
   document.getElementById('btn-finish-sadt').addEventListener('click',     finishSADT);
   document.getElementById('btn-save').addEventListener('click',            saveJSON);
   document.getElementById('btn-export-png').addEventListener('click',      exportPNG);
