@@ -115,6 +115,16 @@ html, body {
   border-color: #ef4444;
   color: #fecaca;
 }
+.tool-btn.primary {
+  border-color: #15803d;
+  color: #86efac;
+  font-weight: 600;
+}
+.tool-btn.primary:hover {
+  background: rgba(34, 197, 94, 0.15);
+  border-color: #22c55e;
+  color: #bbf7d0;
+}
 .tool-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;

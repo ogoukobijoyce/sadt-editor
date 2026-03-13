@@ -74,6 +74,12 @@
 
         <div class="tb-sep"></div>
 
+        <button id="btn-auto-layout" class="tool-btn" title="Aligner automatiquement rectangles et flèches (L)">
+          ⚙️ Auto-aligner
+        </button>
+
+        <div class="tb-sep"></div>
+
         <button id="btn-save" class="tool-btn" title="Sauvegarder le diagramme en JSON (Ctrl+S)">
           💾 Sauvegarder
         </button>
@@ -83,6 +89,12 @@
         <input type="file" id="file-input" accept=".json" style="display:none" aria-label="Sélectionner un fichier JSON à charger">
         <button id="btn-export-png" class="tool-btn" title="Exporter en image PNG">
           🖼 PNG
+        </button>
+
+        <div class="tb-sep"></div>
+
+        <button id="btn-finish-sadt" class="tool-btn primary" title="Terminer le SADT et aligner le diagramme automatiquement">
+          ✅ Terminer le SADT
         </button>
       </div>
     </header>
@@ -108,7 +120,7 @@
     <!-- ── Barre de statut ── -->
     <footer id="status-bar">
       <span id="status-mode">Mode : Sélection</span>
-      <span id="status-hint">Cliquez pour sélectionner · Glissez pour déplacer · Bouton « Nommer » ou (N) pour nommer · Double-clic rect = renommer · Double-clic flèche = nom/virage · Clic droit sur virage = supprimer · Ctrl+S = sauvegarder · Ctrl+O = ouvrir</span>
+      <span id="status-hint">Cliquez pour sélectionner · Glissez pour déplacer · Bouton « Nommer » ou (N) pour nommer · Double-clic rect = renommer · Double-clic flèche = nom/virage · Clic droit sur virage = supprimer · (L) = auto-aligner · Ctrl+S = sauvegarder · Ctrl+O = ouvrir</span>
       <span id="status-sel"></span>
     </footer>
 
