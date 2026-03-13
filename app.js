@@ -343,11 +343,21 @@ function getArrowEndpoints(arrow) {
   let x1, y1, x2, y2;
   if (arrow.startRectId) {
     const r = rects.find(r => r.id === arrow.startRectId);
-    if (r) { const p = getAnchorXY(r, arrow.startAnchor); x1=p.x; y1=p.y; } else { x1=arrow.startX; y1=arrow.startY; }
-  } else { x1=arrow.startX; y1=arrow.startY; }
+    if (r) {
+      const p = getAnchorXY(r, arrow.startAnchor);
+      x1 = p.x; y1 = p.y;
+    } else {
+      x1 = arrow.startX; y1 = arrow.startY;
+    }
+  } else { x1 = arrow.startX; y1 = arrow.startY; }
   if (arrow.endRectId) {
     const r = rects.find(r => r.id === arrow.endRectId);
-    if (r) { const p = getAnchorXY(r, arrow.endAnchor); x2=p.x; y2=p.y; } else { x2=arrow.endX; y2=arrow.endY; }
+    if (r) {
+      const p = getAnchorXY(r, arrow.endAnchor);
+      x2 = p.x; y2 = p.y;
+    } else {
+      x2 = arrow.endX; y2 = arrow.endY;
+    }
   } else { x2=arrow.endX; y2=arrow.endY; }
   return { x1, y1, x2, y2 };
 }
@@ -774,8 +784,16 @@ function fitToView() {
 function computeOrthogonalWaypoints(x1, y1, side1, x2, y2, side2) {
   if (Math.abs(x1-x2)<2 && Math.abs(y1-y2)<2) return [];
   const hS = new Set(['left','right']), vS = new Set(['top','bottom']);
-  if (hS.has(side1) && hS.has(side2)) { const midX=Math.round((x1+x2)/2); if(Math.abs(y1-y2)<2)return[]; return[{x:midX,y:y1},{x:midX,y:y2}]; }
-  if (vS.has(side1) && vS.has(side2)) { const midY=Math.round((y1+y2)/2); if(Math.abs(x1-x2)<2)return[]; return[{x:x1,y:midY},{x:x2,y:midY}]; }
+  if (hS.has(side1) && hS.has(side2)) {
+    const midX = Math.round((x1 + x2) / 2);
+    if (Math.abs(y1 - y2) < 2) return [];
+    return [{ x: midX, y: y1 }, { x: midX, y: y2 }];
+  }
+  if (vS.has(side1) && vS.has(side2)) {
+    const midY = Math.round((y1 + y2) / 2);
+    if (Math.abs(x1 - x2) < 2) return [];
+    return [{ x: x1, y: midY }, { x: x2, y: midY }];
+  }
   if (hS.has(side1) && vS.has(side2)) return [{x:x2,y:y1}];
   if (vS.has(side1) && hS.has(side2)) return [{x:x1,y:y2}];
   if (hS.has(side1) && !side2) { if(Math.abs(y1-y2)<2)return[]; return[{x:x2,y:y1}]; }
@@ -822,8 +840,16 @@ function routeArrowsOrthogonal() {
 
 function segmentIntersectsRect(px, py, qx, qy, r) {
   const minX=r.x, maxX=r.x+r.width, minY=r.y, maxY=r.y+r.height;
-  if (Math.abs(py-qy)<COORD_EPSILON) { if(py<=minY||py>=maxY)return false; const lo=Math.min(px,qx),hi=Math.max(px,qx); return lo<maxX&&hi>minX; }
-  if (Math.abs(px-qx)<COORD_EPSILON) { if(px<=minX||px>=maxX)return false; const lo=Math.min(py,qy),hi=Math.max(py,qy); return lo<maxY&&hi>minY; }
+  if (Math.abs(py - qy) < COORD_EPSILON) {
+    if (py <= minY || py >= maxY) return false;
+    const lo = Math.min(px, qx), hi = Math.max(px, qx);
+    return lo < maxX && hi > minX;
+  }
+  if (Math.abs(px - qx) < COORD_EPSILON) {
+    if (px <= minX || px >= maxX) return false;
+    const lo = Math.min(py, qy), hi = Math.max(py, qy);
+    return lo < maxY && hi > minY;
+  }
   const dx=qx-px, dy=qy-py;
   let tMin=0, tMax=1;
   for (const [p2, q2] of [[-dx,px-minX],[dx,maxX-px],[-dy,py-minY],[dy,maxY-py]]) {
@@ -1003,12 +1029,34 @@ function doResize(mx, my) {
   if (!resizeInfo) return;
   const r=rects.find(r=>r.id===resizeInfo.id); if(!r)return;
   const {orig,handle,mx0,my0}=resizeInfo, dx=mx-mx0, dy=my-my0;
-  switch(handle){
-    case 'nw':{const nw=Math.max(RECT_MIN_W,orig.width-dx),nh=Math.max(RECT_MIN_H,orig.height-dy);r.x=orig.x+orig.width-nw;r.y=orig.y+orig.height-nh;r.width=nw;r.height=nh;break;}
-    case 'ne':{const nh=Math.max(RECT_MIN_H,orig.height-dy);r.y=orig.y+orig.height-nh;r.width=Math.max(RECT_MIN_W,orig.width+dx);r.height=nh;break;}
-    case 'se':r.width=Math.max(RECT_MIN_W,orig.width+dx);r.height=Math.max(RECT_MIN_H,orig.height+dy);break;
-    case 'sw':{const nw=Math.max(RECT_MIN_W,orig.width-dx);r.x=orig.x+orig.width-nw;r.width=nw;r.height=Math.max(RECT_MIN_H,orig.height+dy);break;}
-    default:break;
+  switch (handle) {
+    case 'nw': {
+      const nw = Math.max(RECT_MIN_W, orig.width  - dx);
+      const nh = Math.max(RECT_MIN_H, orig.height - dy);
+      r.x = orig.x + orig.width  - nw;
+      r.y = orig.y + orig.height - nh;
+      r.width = nw; r.height = nh;
+      break;
+    }
+    case 'ne': {
+      const nh = Math.max(RECT_MIN_H, orig.height - dy);
+      r.y      = orig.y + orig.height - nh;
+      r.width  = Math.max(RECT_MIN_W, orig.width + dx);
+      r.height = nh;
+      break;
+    }
+    case 'se':
+      r.width  = Math.max(RECT_MIN_W, orig.width  + dx);
+      r.height = Math.max(RECT_MIN_H, orig.height + dy);
+      break;
+    case 'sw': {
+      const nw = Math.max(RECT_MIN_W, orig.width - dx);
+      r.x      = orig.x + orig.width - nw;
+      r.width  = nw;
+      r.height = Math.max(RECT_MIN_H, orig.height + dy);
+      break;
+    }
+    default: break;
   }
 }
 
