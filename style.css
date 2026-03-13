@@ -115,6 +115,11 @@ html, body {
   border-color: #ef4444;
   color: #fecaca;
 }
+.tool-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
 
 /* Free-arrow group */
 .free-arrow-wrap {
