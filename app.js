@@ -34,7 +34,7 @@ const TYPE_LABELS = {
 };
 
 const MODE_HINTS = {
-  select:         'Cliquez pour sélectionner · Glissez pour déplacer · Bouton « Nommer » ou (N) pour nommer · Double-clic rect = renommer · Double-clic flèche = nom/virage · Clic droit sur virage = supprimer',
+  select:         'Cliquez pour sélectionner · Glissez pour déplacer · Bouton « Nommer » ou (N) pour nommer · Double-clic rect = renommer · Double-clic flèche = nom/virage · Clic droit sur virage = supprimer · Ctrl+S = sauvegarder · Ctrl+O = ouvrir',
   'add-rect':     'Cliquez sur le canvas pour placer un rectangle.',
   'add-arrow':    'Cliquez sur un bord de rectangle (ou n\'importe où) pour démarrer la flèche, puis cliquez pour terminer. Échap pour annuler.',
   'add-free-arrow': 'Cliquez pour démarrer la flèche libre, puis cliquez pour terminer. Échap pour annuler.',
@@ -1029,6 +1029,14 @@ canvasEl.addEventListener('mousedown', e => {
       }
     }
 
+    // Arrow? (checked before rect so arrows inside parent rects can be selected/deleted)
+    const aId = hitArrow(x, y);
+    if (aId) {
+      selectedId   = aId;
+      selectedType = 'arrow';
+      render(); updateStatus(); return;
+    }
+
     // Rect?
     const rId = hitRect(x, y);
     if (rId) {
@@ -1037,14 +1045,6 @@ canvasEl.addEventListener('mousedown', e => {
       selectedType = 'rect';
       isDragging   = true;
       dragInfo     = { id: rId, ox: x - r.x, oy: y - r.y };
-      render(); updateStatus(); return;
-    }
-
-    // Arrow?
-    const aId = hitArrow(x, y);
-    if (aId) {
-      selectedId   = aId;
-      selectedType = 'arrow';
       render(); updateStatus(); return;
     }
 
@@ -1148,10 +1148,7 @@ canvasEl.addEventListener('dblclick', e => {
   const { x, y } = getPos(e);
   if (mode !== 'select') return;
 
-  const rId = hitRect(x, y);
-  if (rId) { startEditRect(rId); return; }
-
-  // Arrow interactions: check near-label first, then waypoint, then segment
+  // Arrow interactions checked before rect so arrows inside parent rects remain accessible
   const aId = hitArrowLabel(x, y) || hitArrow(x, y);
   if (aId) {
     const arrow = arrows.find(a => a.id === aId);
@@ -1185,7 +1182,11 @@ canvasEl.addEventListener('dblclick', e => {
 
     // Fallback → edit label
     startEditArrow(aId);
+    return;
   }
+
+  const rId = hitRect(x, y);
+  if (rId) { startEditRect(rId); return; }
 });
 
 // Right-click on a waypoint of the selected arrow removes it
@@ -1220,6 +1221,7 @@ document.addEventListener('keydown', e => {
   if (editId) return;  // Let text input handle keys
 
   if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveJSON(); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'o') { e.preventDefault(); document.getElementById('file-input').click(); return; }
 
   switch (e.key) {
     case 'Delete':
