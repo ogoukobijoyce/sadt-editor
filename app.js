@@ -17,8 +17,8 @@ const GRID_STEP       = 20;   // px
 const CHILD_PADDING   = 20;   // px – minimum gap between child and parent border
 const PARENT_LABEL_H  = 28;   // px – reserved height at top of parent for its label
 
-const LAYOUT_H_SPACING  = 80;   // px – horizontal gap between top-level rects during auto-layout
-const LAYOUT_V_SPACING  = 60;   // px – vertical gap between rows during auto-layout
+const LAYOUT_H_SPACING  = 100;  // px – horizontal gap between top-level rects during auto-layout
+const LAYOUT_V_SPACING  = 80;   // px – vertical gap between rows during auto-layout
 const LAYOUT_PADDING    = 80;   // px – canvas margin for the auto-layout grid origin
 const STATUS_MSG_DELAY  = 4000; // ms – how long transient status messages stay visible
 
@@ -173,7 +173,7 @@ function getArrowLabelPos(arrow) {
   // Perpendicular offset (clockwise 90°)
   const nx = dy / segLen;
   const ny = -dx / segLen;
-  return { x: mx + nx * 16, y: my + ny * 16 };
+  return { x: mx + nx * 20, y: my + ny * 20 };
 }
 
 /** Find nearest rect border point within SNAP_RADIUS.
@@ -309,11 +309,12 @@ function drawArrowHead(x, y, angle) {
     x - ARROW_HEAD_LEN * Math.cos(angle - ARROW_HEAD_ANG),
     y - ARROW_HEAD_LEN * Math.sin(angle - ARROW_HEAD_ANG)
   );
-  ctx.moveTo(x, y);
   ctx.lineTo(
     x - ARROW_HEAD_LEN * Math.cos(angle + ARROW_HEAD_ANG),
     y - ARROW_HEAD_LEN * Math.sin(angle + ARROW_HEAD_ANG)
   );
+  ctx.closePath();
+  ctx.fill();
   ctx.stroke();
 }
 
@@ -337,7 +338,11 @@ function drawRect(rect, selected) {
   const { x, y, width: w, height: h, label } = rect;
   const isParent = rects.some(r => r.parentId === rect.id);
 
-  if (selected) { ctx.shadowColor = '#3b82f6'; ctx.shadowBlur = 10; }
+  // Drop shadow — blue glow when selected, subtle lift otherwise
+  ctx.shadowColor   = selected ? '#3b82f6' : 'rgba(0,0,0,0.18)';
+  ctx.shadowBlur    = selected ? 12 : 6;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = selected ? 0 : 2;
 
   // Visual style: parent rects have a blue-tinted background and thicker border
   ctx.fillStyle   = isParent ? '#eef6ff' : '#ffffff';
@@ -350,7 +355,10 @@ function drawRect(rect, selected) {
   else               { ctx.rect(x, y, w, h); }
   ctx.fill();
   ctx.stroke();
-  ctx.shadowBlur = 0;
+
+  // Reset shadow before drawing separator and text
+  ctx.shadowBlur    = 0;
+  ctx.shadowOffsetY = 0;
 
   // Horizontal separator below the label area for parent rects
   if (isParent) {
@@ -363,7 +371,7 @@ function drawRect(rect, selected) {
   }
 
   // Label: pinned to the top header for parents, centred for leaf rects
-  ctx.font         = 'bold 13px Arial, sans-serif';
+  ctx.font         = 'bold 14px Arial, sans-serif';
   ctx.fillStyle    = '#111827';
   ctx.textAlign    = 'center';
   ctx.textBaseline = 'middle';
@@ -372,7 +380,7 @@ function drawRect(rect, selected) {
     ctx.fillText(label || 'Fonction', x + w / 2, y + PARENT_LABEL_H / 2, w - 12);
   } else {
     const lines = wrapText(label || 'Fonction', w - 16);
-    const lh    = 17;
+    const lh    = 18;
     let lineY   = y + h / 2 - (lines.length * lh) / 2 + lh / 2;
     for (const ln of lines) {
       ctx.fillText(ln, x + w / 2, lineY, w - 12);
@@ -382,7 +390,6 @@ function drawRect(rect, selected) {
 
   // Resize handles
   if (selected) {
-    ctx.shadowBlur  = 0;
     ctx.fillStyle   = '#2563eb';
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth   = 1.5;
@@ -403,7 +410,7 @@ function drawArrow(arrow, selected) {
   ctx.save();
   ctx.strokeStyle = color;
   ctx.fillStyle   = color;
-  ctx.lineWidth   = selected ? 2.5 : 2;
+  ctx.lineWidth   = selected ? 3 : 2.5;
 
   if (selected) { ctx.shadowColor = color; ctx.shadowBlur = 6; }
 
@@ -435,16 +442,16 @@ function drawArrow(arrow, selected) {
   // Label beside the arrow (offset perpendicular to its direction)
   if (arrow.label) {
     const { x: lx, y: ly } = getArrowLabelPos(arrow);
-    ctx.font = '11.5px Arial, sans-serif';
+    ctx.font = 'bold 13px Arial, sans-serif';
     const tw = ctx.measureText(arrow.label).width;
-    const pad = 4;
-    const bx = lx - tw / 2 - pad, by = ly - 9;
-    ctx.fillStyle   = 'rgba(255,255,255,0.92)';
+    const pad = 5;
+    const bx = lx - tw / 2 - pad, by = ly - 10;
+    ctx.fillStyle   = 'rgba(255,255,255,0.97)';
     ctx.strokeStyle = color;
-    ctx.lineWidth   = 1;
+    ctx.lineWidth   = 1.5;
     ctx.beginPath();
-    if (ctx.roundRect) { ctx.roundRect(bx, by, tw + pad * 2, 18, 3); }
-    else               { ctx.rect(bx, by, tw + pad * 2, 18); }
+    if (ctx.roundRect) { ctx.roundRect(bx, by, tw + pad * 2, 20, 3); }
+    else               { ctx.rect(bx, by, tw + pad * 2, 20); }
     ctx.fill(); ctx.stroke();
     ctx.fillStyle    = color;
     ctx.textAlign    = 'center';
@@ -502,6 +509,7 @@ function render() {
 
     ctx.save();
     ctx.strokeStyle = color;
+    ctx.fillStyle   = color;
     ctx.lineWidth   = 2;
     ctx.setLineDash([7, 4]);
     ctx.beginPath();
@@ -793,8 +801,11 @@ function autoLayout() {
     }
   }
 
-  // Place top-level rects in a grid (ceil(sqrt(n)) columns)
-  const cols      = Math.max(1, Math.ceil(Math.sqrt(topLevel.length)));
+  // Place top-level rects in a grid.
+  // For ≤ 6 rects (typical SADT diagram) use a single row; otherwise use a square-ish grid.
+  const cols      = topLevel.length <= 6
+    ? topLevel.length
+    : Math.max(1, Math.ceil(Math.sqrt(topLevel.length)));
   let rowStartX   = LAYOUT_PADDING;
   let rowStartY   = LAYOUT_PADDING;
   let maxRowH     = 0;
