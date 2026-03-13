@@ -62,10 +62,22 @@ Il est possible de **placer des rectangles à l'intérieur d'autres rectangles**
 | Mécanisme (Mechanism) | 🟠 Orange | Côté inférieur |
 | Connexion | ⬛ Gris | Rect → Rect |
 
+#### Points de virage sur les flèches
+- **Double-cliquez sur un segment de flèche** pour ajouter un point de virage (waypoint) à cet endroit.
+- **Glissez le point de virage** (cercle blanc) pour remodeler la flèche.
+- **Double-cliquez sur un point de virage** pour le supprimer.
+- **Clic droit sur un point de virage** pour le supprimer également.
+
 #### Étiquettes des flèches
 - Double-cliquez sur la flèche, saisissez l'étiquette, appuyez sur **Entrée**.
 - L'étiquette s'affiche **à côté de la flèche** (décalée perpendiculairement à sa direction) dans un encadré coloré.
 - Si la flèche n'a pas d'étiquette, rien n'est affiché.
+
+### Ajustement de la vue
+
+- **🔍 Ajuster vue** — repositionne et redimensionne le diagramme pour qu'il soit entièrement visible dans le canvas.
+- Raccourci clavier : `V`
+- Utile quand des éléments sont trop petits ou placés en dehors de la zone visible.
 
 ### Sauvegarde et chargement
 - **💾 Sauvegarder** — exporte le diagramme complet en fichier JSON.
@@ -82,10 +94,15 @@ Il est possible de **placer des rectangles à l'intérieur d'autres rectangles**
 | `R` | Mode Ajouter un rectangle |
 | `A` | Mode Flèche connexion |
 | `F` | Mode Flèche libre |
+| `V` | Ajuster la vue au contenu |
 | `Suppr` / `Backspace` | Supprimer l'élément sélectionné |
 | `Échap` | Annuler / Revenir en mode Sélection |
 | `Ctrl + S` | Sauvegarder en JSON |
-| Double-clic | Renommer un rectangle ou une flèche |
+| Double-clic rectangle | Renommer le rectangle |
+| Double-clic flèche (sur segment) | Ajouter un point de virage |
+| Double-clic flèche (près étiquette) | Renommer la flèche |
+| Double-clic waypoint | Supprimer le point de virage |
+| Clic droit waypoint | Supprimer le point de virage |
 
 ---
 

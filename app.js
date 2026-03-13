@@ -34,7 +34,7 @@ const TYPE_LABELS = {
 };
 
 const MODE_HINTS = {
-  select:         'Cliquez pour sélectionner · Glissez pour déplacer · Double-clic pour renommer · Suppr pour effacer',
+  select:         'Cliquez pour sélectionner · Glissez pour déplacer · Double-clic rect = renommer · Double-clic flèche = nom/virage · Clic droit sur virage = supprimer',
   'add-rect':     'Cliquez sur le canvas pour placer un rectangle.',
   'add-arrow':    'Cliquez sur un bord de rectangle (ou n\'importe où) pour démarrer la flèche, puis cliquez pour terminer. Échap pour annuler.',
   'add-free-arrow': 'Cliquez pour démarrer la flèche libre, puis cliquez pour terminer. Échap pour annuler.',
@@ -83,6 +83,9 @@ let resizeInfo = null;   // { id, handle, mx0, my0, orig }
 let arrowDraw = null;
 // { startX, startY, startRectId, startAnchor, curX, curY }
 
+// Waypoint dragging
+let waypointDrag = null;   // { arrowId, wpIdx }
+
 // Detect click vs drag
 let mdX = 0, mdY = 0, moved = false;
 
@@ -121,18 +124,43 @@ function getArrowEndpoints(arrow) {
   return { x1, y1, x2, y2 };
 }
 
-/** Compute the label position beside an arrow (offset perpendicular to the arrow). */
-function getArrowLabelPos(arrow) {
+/** Return all points along an arrow as a flat array: [start, ...waypoints, end]. */
+function getArrowPoints(arrow) {
   const { x1, y1, x2, y2 } = getArrowEndpoints(arrow);
-  const mx = (x1 + x2) / 2;
-  const my = (y1 + y2) / 2;
-  const dx = x2 - x1, dy = y2 - y1;
-  const len = Math.hypot(dx, dy) || 1;
-  // Clockwise 90° perpendicular: (dy/len, -dx/len).
-  // For a right-going arrow (dx>0, dy≈0) this points upward,
-  // placing the label above the line — the natural reading position.
-  const nx = dy / len;
-  const ny = -dx / len;
+  const pts = [{ x: x1, y: y1 }];
+  if (arrow.waypoints && arrow.waypoints.length) pts.push(...arrow.waypoints);
+  pts.push({ x: x2, y: y2 });
+  return pts;
+}
+
+/** Compute the label position beside an arrow (offset perpendicular to the middle segment). */
+function getArrowLabelPos(arrow) {
+  const pts = getArrowPoints(arrow);
+  // Find the total length and walk to the midpoint
+  let totalLen = 0;
+  const segLens = [];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const l = Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
+    segLens.push(l);
+    totalLen += l;
+  }
+  let remaining = totalLen / 2;
+  let mx = pts[0].x, my = pts[0].y, dx = 0, dy = 0, segLen = 1;
+  for (let i = 0; i < pts.length - 1; i++) {
+    if (remaining <= segLens[i] || i === pts.length - 2) {
+      const t = segLens[i] > 0 ? remaining / segLens[i] : 0;
+      mx     = pts[i].x + t * (pts[i + 1].x - pts[i].x);
+      my     = pts[i].y + t * (pts[i + 1].y - pts[i].y);
+      dx     = pts[i + 1].x - pts[i].x;
+      dy     = pts[i + 1].y - pts[i].y;
+      segLen = segLens[i] || 1;
+      break;
+    }
+    remaining -= segLens[i];
+  }
+  // Perpendicular offset (clockwise 90°)
+  const nx = dy / segLen;
+  const ny = -dx / segLen;
   return { x: mx + nx * 16, y: my + ny * 16 };
 }
 
@@ -211,10 +239,22 @@ function hitRect(mx, my) {
 function hitArrow(mx, my) {
   for (let i = arrows.length - 1; i >= 0; i--) {
     const a = arrows[i];
-    const { x1, y1, x2, y2 } = getArrowEndpoints(a);
-    if (ptSegDist(mx, my, x1, y1, x2, y2) < 6) return a.id;
+    const pts = getArrowPoints(a);
+    for (let j = 0; j < pts.length - 1; j++) {
+      if (ptSegDist(mx, my, pts[j].x, pts[j].y, pts[j + 1].x, pts[j + 1].y) < 6)
+        return a.id;
+    }
   }
   return null;
+}
+
+/** Return the waypoint index (0-based) under (mx, my) for the given arrow, or -1. */
+function hitWaypoint(mx, my, arrow) {
+  const wps = arrow.waypoints || [];
+  for (let i = 0; i < wps.length; i++) {
+    if (Math.hypot(mx - wps[i].x, my - wps[i].y) < 8) return i;
+  }
+  return -1;
 }
 
 function hitArrowLabel(mx, my) {
@@ -345,7 +385,7 @@ function drawRect(rect, selected) {
 }
 
 function drawArrow(arrow, selected) {
-  const { x1, y1, x2, y2 } = getArrowEndpoints(arrow);
+  const pts   = getArrowPoints(arrow);
   const color = ARROW_COLORS[arrow.arrowType] || ARROW_COLORS.connected;
 
   ctx.save();
@@ -355,13 +395,30 @@ function drawArrow(arrow, selected) {
 
   if (selected) { ctx.shadowColor = color; ctx.shadowBlur = 6; }
 
+  // Draw polyline through all points (start → waypoints → end)
   ctx.beginPath();
-  ctx.moveTo(x1, y1);
-  ctx.lineTo(x2, y2);
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
   ctx.stroke();
   ctx.shadowBlur = 0;
 
-  drawArrowHead(x2, y2, Math.atan2(y2 - y1, x2 - x1));
+  // Arrow head direction: from second-to-last point to last point
+  const last = pts[pts.length - 1];
+  const prev = pts[pts.length - 2];
+  drawArrowHead(last.x, last.y, Math.atan2(last.y - prev.y, last.x - prev.x));
+
+  // Waypoint handles (draggable dots shown only when arrow is selected)
+  if (selected && arrow.waypoints && arrow.waypoints.length > 0) {
+    ctx.lineWidth   = 1.5;
+    ctx.strokeStyle = color;
+    for (const wp of arrow.waypoints) {
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(wp.x, wp.y, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
 
   // Label beside the arrow (offset perpendicular to its direction)
   if (arrow.label) {
@@ -488,6 +545,14 @@ function updateCursor(mx, my) {
       }
     }
   }
+  // Show grab cursor when hovering a waypoint handle of the selected arrow
+  if (selectedType === 'arrow') {
+    const sa = arrows.find(a => a.id === selectedId);
+    if (sa && hitWaypoint(mx, my, sa) >= 0) {
+      canvasEl.style.cursor = 'grab';
+      return;
+    }
+  }
   if (hitRect(mx, my))  { canvasEl.style.cursor = 'grab';    return; }
   if (hitArrow(mx, my)) { canvasEl.style.cursor = 'pointer'; return; }
   canvasEl.style.cursor = 'default';
@@ -560,6 +625,7 @@ function finishArrow(endX, endY, snap) {
     id:           uid(),
     label:        '',
     arrowType,
+    waypoints:    [],
     startRectId:  startRectId  || null,
     startAnchor:  startAnchor  || null,
     startX,
@@ -575,8 +641,8 @@ function finishArrow(endX, endY, snap) {
   selectedType = 'arrow';
   render();
   updateStatus();
-  statusHint.textContent = 'Flèche créée. Double-cliquez sur la flèche pour l\'étiqueter.';
-  setTimeout(() => { if (statusHint.textContent.startsWith('Flèche créée')) statusHint.textContent = MODE_HINTS[mode] || ''; }, 3000);
+  statusHint.textContent = 'Flèche créée. Double-cliquez sur la flèche pour l\'étiqueter. Double-clic sur un segment pour ajouter un virage.';
+  setTimeout(() => { if (statusHint.textContent.startsWith('Flèche créée')) statusHint.textContent = MODE_HINTS[mode] || ''; }, 4000);
 }
 
 function deleteSelected() {
@@ -591,6 +657,63 @@ function deleteSelected() {
   } else {
     arrows = arrows.filter(a => a.id !== selectedId);
   }
+  selectedId = selectedType = null;
+  render();
+  updateStatus();
+}
+
+// ─── Fit-to-view ─────────────────────────────────────────────
+
+/** Reposition and scale all elements so the diagram fills the canvas with padding. */
+function fitToView() {
+  if (rects.length === 0 && arrows.length === 0) return;
+
+  const PAD = 60;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+  for (const r of rects) {
+    minX = Math.min(minX, r.x);
+    minY = Math.min(minY, r.y);
+    maxX = Math.max(maxX, r.x + r.width);
+    maxY = Math.max(maxY, r.y + r.height);
+  }
+  for (const a of arrows) {
+    for (const p of getArrowPoints(a)) {
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
+    }
+  }
+  if (!isFinite(minX)) return;
+
+  const cw = maxX - minX || 1;
+  const ch = maxY - minY || 1;
+  const W  = canvasEl.width, H = canvasEl.height;
+  // Scale down to fit if necessary; never zoom in (max scale = 1)
+  const scale = Math.min((W - 2 * PAD) / cw, (H - 2 * PAD) / ch, 1);
+  const tx = PAD + (W - 2 * PAD - cw * scale) / 2 - minX * scale;
+  const ty = PAD + (H - 2 * PAD - ch * scale) / 2 - minY * scale;
+
+  for (const r of rects) {
+    r.x      = Math.round(r.x * scale + tx);
+    r.y      = Math.round(r.y * scale + ty);
+    r.width  = Math.round(r.width  * scale);
+    r.height = Math.round(r.height * scale);
+  }
+  for (const a of arrows) {
+    a.startX = Math.round(a.startX * scale + tx);
+    a.startY = Math.round(a.startY * scale + ty);
+    a.endX   = Math.round(a.endX   * scale + tx);
+    a.endY   = Math.round(a.endY   * scale + ty);
+    if (a.waypoints) {
+      a.waypoints = a.waypoints.map(wp => ({
+        x: Math.round(wp.x * scale + tx),
+        y: Math.round(wp.y * scale + ty),
+      }));
+    }
+  }
+
   selectedId = selectedType = null;
   render();
   updateStatus();
@@ -882,6 +1005,18 @@ canvasEl.addEventListener('mousedown', e => {
       }
     }
 
+    // Waypoint drag on the currently selected arrow?
+    if (selectedType === 'arrow') {
+      const sa = arrows.find(a => a.id === selectedId);
+      if (sa) {
+        const wpIdx = hitWaypoint(x, y, sa);
+        if (wpIdx >= 0) {
+          waypointDrag = { arrowId: sa.id, wpIdx };
+          return;
+        }
+      }
+    }
+
     // Rect?
     const rId = hitRect(x, y);
     if (rId) {
@@ -938,6 +1073,16 @@ canvasEl.addEventListener('mousemove', e => {
   if (isResizing && resizeInfo) { doResize(x, y); render(); return; }
   if (isDragging && dragInfo)   { doDrag(x, y);   render(); return; }
 
+  // Waypoint dragging
+  if (waypointDrag) {
+    const a = arrows.find(a => a.id === waypointDrag.arrowId);
+    if (a && a.waypoints) {
+      a.waypoints[waypointDrag.wpIdx] = { x, y };
+      render();
+    }
+    return;
+  }
+
   if (arrowDraw) {
     const snap = findSnap(x, y, arrowDraw.startRectId);
     arrowDraw.curX = snap ? snap.x : x;
@@ -984,6 +1129,7 @@ canvasEl.addEventListener('mouseup', e => {
 
   isDragging = false; dragInfo   = null;
   isResizing = false; resizeInfo = null;
+  waypointDrag = null;
 });
 
 canvasEl.addEventListener('dblclick', e => {
@@ -993,8 +1139,58 @@ canvasEl.addEventListener('dblclick', e => {
   const rId = hitRect(x, y);
   if (rId) { startEditRect(rId); return; }
 
+  // Arrow interactions: check near-label first, then waypoint, then segment
   const aId = hitArrowLabel(x, y) || hitArrow(x, y);
-  if (aId) { startEditArrow(aId); return; }
+  if (aId) {
+    const arrow = arrows.find(a => a.id === aId);
+
+    // Near label → edit label
+    if (hitArrowLabel(x, y) === aId) {
+      startEditArrow(aId);
+      return;
+    }
+
+    // On an existing waypoint → remove it
+    const wpIdx = hitWaypoint(x, y, arrow);
+    if (wpIdx >= 0) {
+      arrow.waypoints.splice(wpIdx, 1);
+      selectedId = aId; selectedType = 'arrow';
+      render(); updateStatus();
+      return;
+    }
+
+    // On a segment → add a waypoint at this position
+    if (!arrow.waypoints) arrow.waypoints = [];
+    const pts = getArrowPoints(arrow);
+    for (let j = 0; j < pts.length - 1; j++) {
+      if (ptSegDist(x, y, pts[j].x, pts[j].y, pts[j + 1].x, pts[j + 1].y) < 8) {
+        arrow.waypoints.splice(j, 0, { x, y });
+        selectedId = aId; selectedType = 'arrow';
+        render(); updateStatus();
+        return;
+      }
+    }
+
+    // Fallback → edit label
+    startEditArrow(aId);
+  }
+});
+
+// Right-click on a waypoint of the selected arrow removes it
+canvasEl.addEventListener('contextmenu', e => {
+  const { x, y } = getPos(e);
+  if (selectedType === 'arrow') {
+    const sa = arrows.find(a => a.id === selectedId);
+    if (sa) {
+      const wpIdx = hitWaypoint(x, y, sa);
+      if (wpIdx >= 0) {
+        e.preventDefault();
+        sa.waypoints.splice(wpIdx, 1);
+        render();
+        return;
+      }
+    }
+  }
 });
 
 // ─── Label input events ──────────────────────────────────────
@@ -1027,6 +1223,7 @@ document.addEventListener('keydown', e => {
     case 'r': case 'R': setMode('add-rect'); break;
     case 'a': case 'A': setMode('add-arrow'); break;
     case 'f': case 'F': setMode('add-free-arrow'); break;
+    case 'v': case 'V': fitToView(); break;
   }
 });
 
@@ -1038,6 +1235,7 @@ function setupToolbar() {
   document.getElementById('btn-add-arrow').addEventListener('click',       () => setMode('add-arrow'));
   document.getElementById('btn-add-free-arrow').addEventListener('click',  () => setMode('add-free-arrow'));
   document.getElementById('btn-delete').addEventListener('click',          deleteSelected);
+  document.getElementById('btn-fit-view').addEventListener('click',        fitToView);
   document.getElementById('btn-save').addEventListener('click',            saveJSON);
   document.getElementById('btn-export-png').addEventListener('click',      exportPNG);
 
