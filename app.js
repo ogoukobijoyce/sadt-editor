@@ -1,5 +1,5 @@
 /* ============================================================
-   SADT Editor — app.js
+   SADT Editor Pro — app.js
    Canvas-based interactive SADT diagram editor (vanilla JS)
    ============================================================ */
 'use strict';
@@ -9,27 +9,27 @@ const RECT_W_DEFAULT  = 160;
 const RECT_H_DEFAULT  = 80;
 const RECT_MIN_W      = 60;
 const RECT_MIN_H      = 40;
-const SNAP_RADIUS     = 18;   // px – snap to border threshold
-const HANDLE_SIZE     = 8;    // px – resize-handle square side
-const ARROW_HEAD_LEN  = 14;   // px
-const ARROW_HEAD_ANG  = Math.PI / 6;  // 30°
-const GRID_STEP       = 20;   // px
-const CHILD_PADDING   = 20;   // px – minimum gap between child and parent border
-const PARENT_LABEL_H  = 28;   // px – reserved height at top of parent for its label
+const SNAP_RADIUS     = 18;
+const HANDLE_SIZE     = 8;
+const ARROW_HEAD_LEN  = 14;
+const ARROW_HEAD_ANG  = Math.PI / 6;
+const GRID_STEP       = 20;
+const CHILD_PADDING   = 20;
+const PARENT_LABEL_H  = 28;
 
-const LAYOUT_H_SPACING  = 100;  // px – horizontal gap between top-level rects during auto-layout
-const LAYOUT_V_SPACING  = 80;   // px – vertical gap between rows during auto-layout
-const LAYOUT_PADDING    = 80;   // px – canvas margin for the auto-layout grid origin
-const STATUS_MSG_DELAY  = 4000; // ms – how long transient status messages stay visible
-const COORD_EPSILON     = 1;    // px – near-zero threshold for collinear/identical coordinate checks
-const MAX_OBSTACLE_ITER = 10;   // maximum iterations for obstacle-avoidance loop
+const LAYOUT_H_SPACING  = 100;
+const LAYOUT_V_SPACING  = 80;
+const LAYOUT_PADDING    = 80;
+const STATUS_MSG_DELAY  = 4000;
+const COORD_EPSILON     = 1;
+const MAX_OBSTACLE_ITER = 10;
 
 const ARROW_COLORS = {
-  input:     '#2196F3',   // blue
-  output:    '#4CAF50',   // green
-  control:   '#F44336',   // red
-  mechanism: '#FF9800',   // orange
-  connected: '#4b5563',   // dark grey – rect-to-rect connection
+  input:     '#2196F3',
+  output:    '#4CAF50',
+  control:   '#F44336',
+  mechanism: '#FF9800',
+  connected: '#4b5563',
 };
 
 const TYPE_LABELS = {
@@ -41,10 +41,10 @@ const TYPE_LABELS = {
 };
 
 const MODE_HINTS = {
-  select:         'Cliquez pour sélectionner · Glissez pour déplacer · Bouton « Nommer » ou (N) pour nommer · Double-clic rect = renommer · Double-clic flèche = nom/virage · Clic droit sur virage = supprimer · (L) = auto-aligner · (Q) = aligner flèches · Ctrl+S = sauvegarder · Ctrl+O = ouvrir',
-  'add-rect':     'Cliquez sur le canvas pour placer un rectangle.',
-  'add-arrow':    'Cliquez sur un bord de rectangle (ou n\'importe où) pour démarrer la flèche, puis cliquez pour terminer. Échap pour annuler.',
-  'add-free-arrow': 'Cliquez pour démarrer la flèche libre, puis cliquez pour terminer. Échap pour annuler.',
+  select:           'Cliquer pour sélectionner · Glisser pour déplacer · N=renommer · Ctrl+DblClic=actigramme · Suppr=supprimer',
+  'add-rect':       'Cliquer sur le canvas pour placer une fonction.',
+  'add-arrow':      'Cliquer sur un bord de fonction pour démarrer, puis cliquer pour terminer. Échap pour annuler.',
+  'add-free-arrow': 'Cliquer pour démarrer la flèche SADT, puis cliquer pour terminer. Échap pour annuler.',
 };
 
 // ─── DOM references ──────────────────────────────────────────
@@ -57,55 +57,274 @@ const statusMode  = document.getElementById('status-mode');
 const statusHint  = document.getElementById('status-hint');
 const statusSel   = document.getElementById('status-sel');
 
+// ─── Tab system ──────────────────────────────────────────────
+
+let _tabSeq = 0;
+
+function createTab(label, type, parentRectId) {
+  type         = type         || 'actigramme';
+  parentRectId = parentRectId || null;
+  return {
+    id:           'tab-' + (++_tabSeq),
+    label,
+    type,
+    parentRectId,
+    rects:        [],
+    arrows:       [],
+    nextId:       1,
+    history:      [],
+    historyIdx:   -1,
+    selId:        null,
+    selType:      null,
+  };
+}
+
+const tabs       = [createTab('Top-Level', 'top-level', null)];
+let currentTabId = tabs[0].id;
+
+function currentTab() {
+  return tabs.find(t => t.id === currentTabId) || tabs[0];
+}
+
 // ─── Application state ───────────────────────────────────────
-let rects  = [];   // Array<Rect>
-let arrows = [];   // Array<Arrow>
+let rects  = tabs[0].rects;
+let arrows = tabs[0].arrows;
 let _id    = 1;
+
 function uid() { return 'e' + (_id++); }
 
-/*
- * Rect  { id, x, y, width, height, label, parentId }
- * Arrow { id, label, arrowType,
- *         startRectId, startAnchor,   // anchor = { side, t }
- *         startX, startY,             // fallback / free endpoint
- *         endRectId,   endAnchor,
- *         endX,   endY }
- */
-
 let mode          = 'select';
-let freeArrowType = 'input';   // used in 'add-free-arrow' mode
+let freeArrowType = 'input';
 
 let selectedId   = null;
-let selectedType = null;   // 'rect' | 'arrow'
+let selectedType = null;
+
+// Display toggles
+let showGrid   = true;
+let snapToGrid = true;
 
 // Drag
 let isDragging = false;
-let dragInfo   = null;   // { id, ox, oy }
+let dragInfo   = null;
 
 // Resize
 let isResizing = false;
-let resizeInfo = null;   // { id, handle, mx0, my0, orig }
+let resizeInfo = null;
 
-// Arrow drawing (2-click interaction)
+// Arrow drawing
 let arrowDraw = null;
-// { startX, startY, startRectId, startAnchor, curX, curY }
 
 // Waypoint dragging
-let waypointDrag = null;   // { arrowId, wpIdx }
+let waypointDrag = null;
 
-// Segment drag – pending waypoint creation on first mouse move (arrow malleability)
-let segmentDragInfo = null;  // { arrowId, segIdx }
-
-// Rubber-band (rectangle) selection
-let selectionBox = null;         // { startX, startY, curX, curY }
-let multiSelectedArrowIds = [];  // arrow IDs selected by rubber-band
-
-// Detect click vs drag
+// Click vs drag detection
 let mdX = 0, mdY = 0, moved = false;
 
 // Inline text editing
 let editId   = null;
 let editType = null;
+
+// Clipboard
+let clipboard = null;
+
+// ─── Tab management ──────────────────────────────────────────
+
+function switchToTab(tabId) {
+  const curTab   = currentTab();
+  curTab.nextId  = _id;
+  curTab.selId   = selectedId;
+  curTab.selType = selectedType;
+
+  currentTabId = tabId;
+  const newTab = currentTab();
+  rects        = newTab.rects;
+  arrows       = newTab.arrows;
+  _id          = newTab.nextId;
+  selectedId   = newTab.selId;
+  selectedType = newTab.selType;
+
+  renderTabBar();
+  render();
+  updateStatus();
+  updateNavBar();
+}
+
+function addNewTab(label, type, parentRectId) {
+  const tab = createTab(label, type || 'actigramme', parentRectId || null);
+  tabs.push(tab);
+  switchToTab(tab.id);
+}
+
+function closeTab(tabId) {
+  if (tabs.length <= 1) { showStatusMsg('Impossible de fermer le dernier onglet.'); return; }
+  const idx = tabs.findIndex(t => t.id === tabId);
+  if (idx === -1) return;
+  tabs.splice(idx, 1);
+  switchToTab(tabs[Math.min(idx, tabs.length - 1)].id);
+}
+
+function openActigramme(rect) {
+  if (!rect) return;
+  const existing = tabs.find(t => t.parentRectId === rect.id);
+  if (existing) { switchToTab(existing.id); return; }
+  addNewTab('Actigramme : ' + (rect.label || rect.id), 'actigramme', rect.id);
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function renderTabBar() {
+  const tabBar    = document.getElementById('tab-bar');
+  const btnNewTab = document.getElementById('btn-new-tab');
+  tabBar.querySelectorAll('.canvas-tab').forEach(el => el.remove());
+
+  tabs.forEach(tab => {
+    const div = document.createElement('div');
+    div.className      = 'canvas-tab' + (tab.id === currentTabId ? ' active' : '');
+    div.dataset.tabId  = tab.id;
+    const badge        = tab.type === 'top-level' ? 'A-0' : 'A';
+    div.innerHTML =
+      '<span class="tab-label">' + escapeHtml(tab.label) + '</span>' +
+      '<span class="tab-type-badge">' + badge + '</span>' +
+      '<button class="tab-close" title="Fermer">\u00D7</button>';
+
+    div.addEventListener('click', e => {
+      if (e.target.classList.contains('tab-close')) return;
+      switchToTab(tab.id);
+    });
+    div.querySelector('.tab-close').addEventListener('click', e => {
+      e.stopPropagation(); closeTab(tab.id);
+    });
+    tabBar.insertBefore(div, btnNewTab);
+  });
+}
+
+function updateNavBar() {
+  const badge = document.getElementById('nav-level-badge');
+  if (badge) badge.textContent = currentTab().label;
+}
+
+// ─── History (Undo / Redo) ───────────────────────────────────
+
+function saveHistory() {
+  const tab = currentTab();
+  tab.history    = tab.history.slice(0, tab.historyIdx + 1);
+  tab.history.push(JSON.stringify({ rects, arrows, nextId: _id }));
+  tab.historyIdx = tab.history.length - 1;
+  if (tab.history.length > 80) { tab.history.shift(); tab.historyIdx--; }
+  updateUndoRedoBtns();
+}
+
+function applyHistoryState(state) {
+  const tab    = currentTab();
+  rects        = tab.rects  = state.rects;
+  arrows       = tab.arrows = state.arrows;
+  _id          = tab.nextId = state.nextId;
+  selectedId   = null; selectedType = null;
+  render(); updateStatus(); updateUndoRedoBtns();
+}
+
+function undo() {
+  const tab = currentTab();
+  if (tab.historyIdx <= 0) return;
+  tab.historyIdx--;
+  applyHistoryState(JSON.parse(tab.history[tab.historyIdx]));
+  showStatusMsg('Annulé');
+}
+
+function redo() {
+  const tab = currentTab();
+  if (tab.historyIdx >= tab.history.length - 1) return;
+  tab.historyIdx++;
+  applyHistoryState(JSON.parse(tab.history[tab.historyIdx]));
+  showStatusMsg('Refait');
+}
+
+function updateUndoRedoBtns() {
+  const tab = currentTab();
+  const u   = document.getElementById('btn-undo');
+  const r   = document.getElementById('btn-redo');
+  if (u) u.disabled = tab.historyIdx <= 0;
+  if (r) r.disabled = tab.historyIdx >= tab.history.length - 1;
+}
+
+// ─── Clipboard (Copy / Paste) ────────────────────────────────
+
+function copySelected() {
+  if (selectedType !== 'rect' || !selectedId) return;
+  const r = rects.find(r => r.id === selectedId);
+  if (!r) return;
+  clipboard = JSON.parse(JSON.stringify(r));
+  const btn = document.getElementById('btn-paste');
+  if (btn) btn.disabled = false;
+  showStatusMsg('Copié : «\u00A0' + (r.label || r.id) + '\u00A0»');
+}
+
+function pasteClipboard() {
+  if (!clipboard) return;
+  saveHistory();
+  const newR = { ...JSON.parse(JSON.stringify(clipboard)), id: uid(), x: clipboard.x + GRID_STEP, y: clipboard.y + GRID_STEP, parentId: null };
+  rects.push(newR);
+  selectedId   = newR.id;
+  selectedType = 'rect';
+  render(); updateStatus();
+  showStatusMsg('Collé');
+}
+
+// ─── Snap to grid ────────────────────────────────────────────
+
+function snapCoord(v) {
+  return snapToGrid ? Math.round(v / GRID_STEP) * GRID_STEP : v;
+}
+
+// ─── SADT Validation ─────────────────────────────────────────
+
+function validateSADT() {
+  const errors   = [];
+  const warnings = [];
+
+  if (rects.length === 0) { warnings.push('Le diagramme est vide (aucune fonction).'); }
+
+  rects.forEach(rect => {
+    const lbl       = '"' + (rect.label || rect.id) + '"';
+    const inFlux    = arrows.filter(a => a.endRectId === rect.id   && a.arrowType !== 'control' && a.arrowType !== 'mechanism');
+    const outFlux   = arrows.filter(a => a.startRectId === rect.id && a.arrowType !== 'control' && a.arrowType !== 'mechanism');
+    const ctrls     = arrows.filter(a => a.endRectId === rect.id   && a.arrowType === 'control');
+    const connIn    = arrows.filter(a => a.endRectId === rect.id   && a.arrowType === 'connected');
+
+    if (inFlux.length  === 0 && connIn.length === 0) warnings.push('Fonction ' + lbl + ' : aucune entrée.');
+    if (outFlux.length === 0 && connIn.length === 0) warnings.push('Fonction ' + lbl + ' : aucune sortie.');
+    if (ctrls.length   === 0)                        warnings.push('Fonction ' + lbl + ' : aucun contrôle.');
+  });
+
+  if (rects.length > 1) {
+    rects.filter(r => !arrows.some(a => a.startRectId === r.id || a.endRectId === r.id))
+         .forEach(r => warnings.push('Fonction "' + (r.label || r.id) + '" : non connectée.'));
+  }
+
+  const msg = errors.length === 0 && warnings.length === 0
+    ? '✅ Diagramme SADT valide !\n\nToutes les règles de cohérence sont respectées.'
+    : [
+        errors.length   > 0 ? 'Erreurs (' + errors.length + ') :\n'   + errors.map(e   => '❌ ' + e).join('\n') : '',
+        warnings.length > 0 ? 'Avertissements (' + warnings.length + ') :\n' + warnings.map(w => '⚠️ ' + w).join('\n') : '',
+      ].filter(Boolean).join('\n\n');
+
+  alert(msg);
+}
+
+// ─── Status helpers ──────────────────────────────────────────
+
+let _statusTimer = null;
+function showStatusMsg(msg) {
+  statusHint.textContent = msg;
+  clearTimeout(_statusTimer);
+  _statusTimer = setTimeout(() => {
+    if (statusHint.textContent === msg) statusHint.textContent = MODE_HINTS[mode] || '';
+  }, STATUS_MSG_DELAY);
+}
 
 // ─── Geometry helpers ────────────────────────────────────────
 
@@ -113,32 +332,26 @@ function getAnchorXY(rect, anchor) {
   const { x, y, width: w, height: h } = rect;
   switch (anchor.side) {
     case 'left':   return { x,     y: y + anchor.t * h };
-    case 'right':  return { x: x + w, y: y + anchor.t * h };
+    case 'right':  return { x: x+w, y: y + anchor.t * h };
     case 'top':    return { x: x + anchor.t * w, y };
-    case 'bottom': return { x: x + anchor.t * w, y: y + h };
+    case 'bottom': return { x: x + anchor.t * w, y: y+h };
     default:       return { x, y };
   }
 }
 
 function getArrowEndpoints(arrow) {
   let x1, y1, x2, y2;
-
   if (arrow.startRectId) {
     const r = rects.find(r => r.id === arrow.startRectId);
-    if (r) { const p = getAnchorXY(r, arrow.startAnchor); x1 = p.x; y1 = p.y; }
-    else   { x1 = arrow.startX; y1 = arrow.startY; }
-  } else { x1 = arrow.startX; y1 = arrow.startY; }
-
+    if (r) { const p = getAnchorXY(r, arrow.startAnchor); x1=p.x; y1=p.y; } else { x1=arrow.startX; y1=arrow.startY; }
+  } else { x1=arrow.startX; y1=arrow.startY; }
   if (arrow.endRectId) {
     const r = rects.find(r => r.id === arrow.endRectId);
-    if (r) { const p = getAnchorXY(r, arrow.endAnchor); x2 = p.x; y2 = p.y; }
-    else   { x2 = arrow.endX; y2 = arrow.endY; }
-  } else { x2 = arrow.endX; y2 = arrow.endY; }
-
+    if (r) { const p = getAnchorXY(r, arrow.endAnchor); x2=p.x; y2=p.y; } else { x2=arrow.endX; y2=arrow.endY; }
+  } else { x2=arrow.endX; y2=arrow.endY; }
   return { x1, y1, x2, y2 };
 }
 
-/** Return all points along an arrow as a flat array: [start, ...waypoints, end]. */
 function getArrowPoints(arrow) {
   const { x1, y1, x2, y2 } = getArrowEndpoints(arrow);
   const pts = [{ x: x1, y: y1 }];
@@ -147,93 +360,59 @@ function getArrowPoints(arrow) {
   return pts;
 }
 
-/** Compute the label position beside an arrow.
- *  For orthogonal arrows (with waypoints) place the label along the longest
- *  segment; for diagonal / free arrows use the midpoint with perpendicular offset. */
 function getArrowLabelPos(arrow) {
   const pts = getArrowPoints(arrow);
   if (pts.length < 2) return { x: 0, y: 0 };
-
-  // Find the longest segment to place the label there (most readable)
   let bestIdx = 0, bestLen = 0;
   const segLens = [];
   for (let i = 0; i < pts.length - 1; i++) {
-    const l = Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
+    const l = Math.hypot(pts[i+1].x - pts[i].x, pts[i+1].y - pts[i].y);
     segLens.push(l);
     if (l > bestLen) { bestLen = l; bestIdx = i; }
   }
-
-  // Midpoint and direction of the chosen segment
-  const p0 = pts[bestIdx], p1 = pts[bestIdx + 1];
-  const mx = (p0.x + p1.x) / 2;
-  const my = (p0.y + p1.y) / 2;
-  const dx = p1.x - p0.x;
-  const dy = p1.y - p0.y;
-  const segLen = segLens[bestIdx] || 1;
-
-  // Perpendicular offset (clockwise 90°) – 18 px to keep label clear of the line
-  const nx = dy / segLen;
-  const ny = -dx / segLen;
-  return { x: mx + nx * 18, y: my + ny * 18 };
+  const p0 = pts[bestIdx], p1 = pts[bestIdx+1];
+  const mx = (p0.x+p1.x)/2, my = (p0.y+p1.y)/2;
+  const dx = p1.x-p0.x, dy = p1.y-p0.y;
+  const sl = segLens[bestIdx] || 1;
+  return { x: mx + dy/sl*18, y: my + (-dx/sl)*18 };
 }
 
-/** Find nearest rect border point within SNAP_RADIUS.
- *  Returns { rectId, anchor, x, y } or null. */
-function findSnap(mx, my, excludeId = null) {
+function findSnap(mx, my, excludeId) {
   let best = null, bestD = SNAP_RADIUS;
-
   for (const rect of rects) {
     if (rect.id === excludeId) continue;
     const { x, y, width: w, height: h } = rect;
-
-    // Left / Right (vertical sides) – snap if y is within rect
-    if (my >= y && my <= y + h) {
+    if (my >= y && my <= y+h) {
       let d = Math.abs(mx - x);
-      if (d < bestD) {
-        bestD = d;
-        best = { rectId: rect.id, anchor: { side: 'left',  t: (my - y) / h }, x, y: my };
-      }
-      d = Math.abs(mx - (x + w));
-      if (d < bestD) {
-        bestD = d;
-        best = { rectId: rect.id, anchor: { side: 'right', t: (my - y) / h }, x: x + w, y: my };
-      }
+      if (d < bestD) { bestD=d; best={ rectId: rect.id, anchor:{ side:'left',  t:(my-y)/h }, x,    y:my }; }
+      d = Math.abs(mx - (x+w));
+      if (d < bestD) { bestD=d; best={ rectId: rect.id, anchor:{ side:'right', t:(my-y)/h }, x:x+w,y:my }; }
     }
-
-    // Top / Bottom (horizontal sides) – snap if x is within rect
-    if (mx >= x && mx <= x + w) {
+    if (mx >= x && mx <= x+w) {
       let d = Math.abs(my - y);
-      if (d < bestD) {
-        bestD = d;
-        best = { rectId: rect.id, anchor: { side: 'top',    t: (mx - x) / w }, x: mx, y };
-      }
-      d = Math.abs(my - (y + h));
-      if (d < bestD) {
-        bestD = d;
-        best = { rectId: rect.id, anchor: { side: 'bottom', t: (mx - x) / w }, x: mx, y: y + h };
-      }
+      if (d < bestD) { bestD=d; best={ rectId: rect.id, anchor:{ side:'top',    t:(mx-x)/w }, x:mx, y    }; }
+      d = Math.abs(my - (y+h));
+      if (d < bestD) { bestD=d; best={ rectId: rect.id, anchor:{ side:'bottom', t:(mx-x)/w }, x:mx, y:y+h}; }
     }
   }
-
   return best;
 }
 
-// Distance from point (px,py) to segment (x1,y1)-(x2,y2)
 function ptSegDist(px, py, x1, y1, x2, y2) {
-  const dx = x2 - x1, dy = y2 - y1;
-  const lenSq = dx * dx + dy * dy;
-  if (lenSq === 0) return Math.hypot(px - x1, py - y1);
-  const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lenSq));
-  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+  const dx = x2-x1, dy = y2-y1;
+  const lenSq = dx*dx + dy*dy;
+  if (lenSq === 0) return Math.hypot(px-x1, py-y1);
+  const t = Math.max(0, Math.min(1, ((px-x1)*dx + (py-y1)*dy) / lenSq));
+  return Math.hypot(px - (x1+t*dx), py - (y1+t*dy));
 }
 
 function rectHandles(rect) {
   const { x, y, width: w, height: h } = rect;
   return [
-    { handle: 'nw', x: x,     y: y     },
-    { handle: 'ne', x: x + w, y: y     },
-    { handle: 'se', x: x + w, y: y + h },
-    { handle: 'sw', x: x,     y: y + h },
+    { handle: 'nw', x,     y     },
+    { handle: 'ne', x: x+w,y     },
+    { handle: 'se', x: x+w,y:y+h },
+    { handle: 'sw', x,     y:y+h },
   ];
 }
 
@@ -243,30 +422,24 @@ function hitRect(mx, my) {
   const order = getRenderOrder();
   for (let i = order.length - 1; i >= 0; i--) {
     const r = order[i];
-    if (mx >= r.x && mx <= r.x + r.width && my >= r.y && my <= r.y + r.height)
-      return r.id;
+    if (mx >= r.x && mx <= r.x+r.width && my >= r.y && my <= r.y+r.height) return r.id;
   }
   return null;
 }
 
 function hitArrow(mx, my) {
   for (let i = arrows.length - 1; i >= 0; i--) {
-    const a = arrows[i];
-    const pts = getArrowPoints(a);
-    for (let j = 0; j < pts.length - 1; j++) {
-      if (ptSegDist(mx, my, pts[j].x, pts[j].y, pts[j + 1].x, pts[j + 1].y) < 6)
-        return a.id;
-    }
+    const a = arrows[i], pts = getArrowPoints(a);
+    for (let j = 0; j < pts.length - 1; j++)
+      if (ptSegDist(mx, my, pts[j].x, pts[j].y, pts[j+1].x, pts[j+1].y) < 6) return a.id;
   }
   return null;
 }
 
-/** Return the waypoint index (0-based) under (mx, my) for the given arrow, or -1. */
 function hitWaypoint(mx, my, arrow) {
   const wps = arrow.waypoints || [];
-  for (let i = 0; i < wps.length; i++) {
-    if (Math.hypot(mx - wps[i].x, my - wps[i].y) < 8) return i;
-  }
+  for (let i = 0; i < wps.length; i++)
+    if (Math.hypot(mx-wps[i].x, my-wps[i].y) < 8) return i;
   return -1;
 }
 
@@ -275,25 +448,25 @@ function hitArrowLabel(mx, my) {
     const a = arrows[i];
     if (!a.label) continue;
     const { x, y } = getArrowLabelPos(a);
-    if (Math.hypot(mx - x, my - y) < 20) return a.id;
+    if (Math.hypot(mx-x, my-y) < 20) return a.id;
   }
   return null;
 }
 
 function hitHandle(mx, my, rect) {
   const half = HANDLE_SIZE / 2 + 2;
-  for (const h of rectHandles(rect)) {
-    if (Math.abs(mx - h.x) <= half && Math.abs(my - h.y) <= half) return h.handle;
-  }
+  for (const h of rectHandles(rect))
+    if (Math.abs(mx-h.x) <= half && Math.abs(my-h.y) <= half) return h.handle;
   return null;
 }
 
 // ─── Rendering ───────────────────────────────────────────────
 
 function drawGrid() {
+  if (!showGrid) return;
   ctx.save();
-  ctx.strokeStyle = '#e4e7ec';
-  ctx.lineWidth = 0.5;
+  ctx.strokeStyle = '#d8e0e8';
+  ctx.lineWidth   = 0.5;
   for (let x = 0; x <= canvasEl.width; x += GRID_STEP) {
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvasEl.height); ctx.stroke();
   }
@@ -306,17 +479,9 @@ function drawGrid() {
 function drawArrowHead(x, y, angle) {
   ctx.beginPath();
   ctx.moveTo(x, y);
-  ctx.lineTo(
-    x - ARROW_HEAD_LEN * Math.cos(angle - ARROW_HEAD_ANG),
-    y - ARROW_HEAD_LEN * Math.sin(angle - ARROW_HEAD_ANG)
-  );
-  ctx.lineTo(
-    x - ARROW_HEAD_LEN * Math.cos(angle + ARROW_HEAD_ANG),
-    y - ARROW_HEAD_LEN * Math.sin(angle + ARROW_HEAD_ANG)
-  );
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
+  ctx.lineTo(x - ARROW_HEAD_LEN * Math.cos(angle - ARROW_HEAD_ANG), y - ARROW_HEAD_LEN * Math.sin(angle - ARROW_HEAD_ANG));
+  ctx.lineTo(x - ARROW_HEAD_LEN * Math.cos(angle + ARROW_HEAD_ANG), y - ARROW_HEAD_LEN * Math.sin(angle + ARROW_HEAD_ANG));
+  ctx.closePath(); ctx.fill(); ctx.stroke();
 }
 
 function wrapText(text, maxWidth) {
@@ -326,9 +491,8 @@ function wrapText(text, maxWidth) {
   let line = '';
   for (const word of words) {
     const test = line ? line + ' ' + word : word;
-    if (ctx.measureText(test).width > maxWidth && line) {
-      lines.push(line); line = word;
-    } else { line = test; }
+    if (ctx.measureText(test).width > maxWidth && line) { lines.push(line); line = word; }
+    else { line = test; }
   }
   if (line) lines.push(line);
   return lines.length ? lines : [''];
@@ -339,68 +503,46 @@ function drawRect(rect, selected) {
   const { x, y, width: w, height: h, label } = rect;
   const isParent = rects.some(r => r.parentId === rect.id);
 
-  // Drop shadow — blue glow when selected, subtle lift otherwise
   ctx.shadowColor   = selected ? '#3b82f6' : 'rgba(0,0,0,0.18)';
-  ctx.shadowBlur    = selected ? 12 : 6;
+  ctx.shadowBlur    = selected ? 12 : 5;
   ctx.shadowOffsetX = 0;
   ctx.shadowOffsetY = selected ? 0 : 2;
 
-  // Visual style: parent rects have a blue-tinted background and thicker border
   ctx.fillStyle   = isParent ? '#eef6ff' : '#ffffff';
   ctx.strokeStyle = selected ? (isParent ? '#1d4ed8' : '#2563eb') : (isParent ? '#1e40af' : '#374151');
   ctx.lineWidth   = selected ? (isParent ? 3 : 2.5) : (isParent ? 2 : 1.5);
 
-  // Rounded rect (with fallback for older browsers)
   ctx.beginPath();
-  if (ctx.roundRect) { ctx.roundRect(x, y, w, h, 4); }
-  else               { ctx.rect(x, y, w, h); }
-  ctx.fill();
-  ctx.stroke();
+  if (ctx.roundRect) { ctx.roundRect(x, y, w, h, 4); } else { ctx.rect(x, y, w, h); }
+  ctx.fill(); ctx.stroke();
 
-  // Reset shadow before drawing separator and text
-  ctx.shadowBlur    = 0;
-  ctx.shadowOffsetY = 0;
+  ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
 
-  // Horizontal separator below the label area for parent rects
   if (isParent) {
     ctx.strokeStyle = selected ? '#1d4ed8' : '#93c5fd';
     ctx.lineWidth   = 1;
-    ctx.beginPath();
-    ctx.moveTo(x + 2, y + PARENT_LABEL_H);
-    ctx.lineTo(x + w - 2, y + PARENT_LABEL_H);
-    ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x+2, y+PARENT_LABEL_H); ctx.lineTo(x+w-2, y+PARENT_LABEL_H); ctx.stroke();
   }
 
-  // Label: pinned to the top header for parents, centred for leaf rects
-  ctx.font         = 'bold 14px Arial, sans-serif';
-  ctx.fillStyle    = '#111827';
-  ctx.textAlign    = 'center';
-  ctx.textBaseline = 'middle';
+  ctx.font = 'bold 14px Arial, sans-serif';
+  ctx.fillStyle = '#111827'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
 
   if (isParent) {
-    ctx.fillText(label || 'Fonction', x + w / 2, y + PARENT_LABEL_H / 2, w - 12);
+    ctx.fillText(label || 'Fonction', x+w/2, y+PARENT_LABEL_H/2, w-12);
   } else {
-    const lines = wrapText(label || 'Fonction', w - 16);
-    const lh    = 18;
-    let lineY   = y + h / 2 - (lines.length * lh) / 2 + lh / 2;
-    for (const ln of lines) {
-      ctx.fillText(ln, x + w / 2, lineY, w - 12);
-      lineY += lh;
-    }
+    const lines = wrapText(label || 'Fonction', w-16);
+    const lh = 18;
+    let lineY = y + h/2 - (lines.length * lh)/2 + lh/2;
+    for (const ln of lines) { ctx.fillText(ln, x+w/2, lineY, w-12); lineY += lh; }
   }
 
-  // Resize handles
   if (selected) {
-    ctx.fillStyle   = '#2563eb';
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth   = 1.5;
+    ctx.fillStyle = '#2563eb'; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5;
     for (const h of rectHandles(rect)) {
-      ctx.beginPath();
-      ctx.rect(h.x - HANDLE_SIZE / 2, h.y - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE);
+      ctx.beginPath(); ctx.rect(h.x-HANDLE_SIZE/2, h.y-HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE);
       ctx.fill(); ctx.stroke();
     }
   }
-
   ctx.restore();
 }
 
@@ -409,133 +551,78 @@ function drawArrow(arrow, selected) {
   const color = ARROW_COLORS[arrow.arrowType] || ARROW_COLORS.connected;
 
   ctx.save();
-  ctx.strokeStyle = color;
-  ctx.fillStyle   = color;
+  ctx.strokeStyle = color; ctx.fillStyle = color;
   ctx.lineWidth   = selected ? 3 : 2.5;
-
   if (selected) { ctx.shadowColor = color; ctx.shadowBlur = 6; }
 
-  // Draw polyline through all points (start → waypoints → end)
   ctx.beginPath();
   ctx.moveTo(pts[0].x, pts[0].y);
   for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
   ctx.stroke();
   ctx.shadowBlur = 0;
 
-  // Arrow head direction: from second-to-last point to last point
-  const last = pts[pts.length - 1];
-  const prev = pts[pts.length - 2];
-  drawArrowHead(last.x, last.y, Math.atan2(last.y - prev.y, last.x - prev.x));
+  const last = pts[pts.length-1], prev = pts[pts.length-2];
+  drawArrowHead(last.x, last.y, Math.atan2(last.y-prev.y, last.x-prev.x));
 
-  // Waypoint handles (draggable dots shown only when arrow is selected)
   if (selected && arrow.waypoints && arrow.waypoints.length > 0) {
-    ctx.lineWidth   = 1.5;
-    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5; ctx.strokeStyle = color;
     for (const wp of arrow.waypoints) {
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath();
-      ctx.arc(wp.x, wp.y, 5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
+      ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(wp.x, wp.y, 5, 0, Math.PI*2); ctx.fill(); ctx.stroke();
     }
   }
 
-  // Label beside the arrow (offset perpendicular to its direction)
   if (arrow.label) {
     const { x: lx, y: ly } = getArrowLabelPos(arrow);
     ctx.font = 'bold 13px Arial, sans-serif';
-    const tw = ctx.measureText(arrow.label).width;
-    const pad = 5;
-    const bx = lx - tw / 2 - pad, by = ly - 10;
+    const tw  = ctx.measureText(arrow.label).width, pad = 5;
     ctx.fillStyle   = 'rgba(255,255,255,0.97)';
-    ctx.strokeStyle = color;
-    ctx.lineWidth   = 1.5;
+    ctx.strokeStyle = color; ctx.lineWidth = 1.5;
     ctx.beginPath();
-    if (ctx.roundRect) { ctx.roundRect(bx, by, tw + pad * 2, 20, 3); }
-    else               { ctx.rect(bx, by, tw + pad * 2, 20); }
+    if (ctx.roundRect) { ctx.roundRect(lx-tw/2-pad, ly-10, tw+pad*2, 20, 3); }
+    else               { ctx.rect(lx-tw/2-pad, ly-10, tw+pad*2, 20); }
     ctx.fill(); ctx.stroke();
-    ctx.fillStyle    = color;
-    ctx.textAlign    = 'center';
-    ctx.textBaseline = 'middle';
+    ctx.fillStyle = color; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(arrow.label, lx, ly);
   }
-
   ctx.restore();
 }
 
-/** Return rects sorted so that parents are drawn before their children (topological order). */
 function getRenderOrder() {
-  const result = [];
-  const visited = new Set();
-
+  const result = [], visited = new Set();
   function visit(r) {
     if (visited.has(r.id)) return;
-    visited.add(r.id);
-    result.push(r);
-    for (const child of rects) {
-      if (child.parentId === r.id) visit(child);
-    }
+    visited.add(r.id); result.push(r);
+    rects.forEach(child => { if (child.parentId === r.id) visit(child); });
   }
-
-  // Start with top-level rects (no parent or orphaned)
-  for (const r of rects) {
-    if (!r.parentId || !rects.find(p => p.id === r.parentId)) visit(r);
-  }
-  // Safety: include any not yet visited
-  for (const r of rects) visit(r);
-
+  rects.forEach(r => { if (!r.parentId || !rects.find(p => p.id === r.parentId)) visit(r); });
+  rects.forEach(r => visit(r));
   return result;
 }
 
 function render() {
   ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
-  ctx.fillStyle = '#f8f9fa';
+  ctx.fillStyle = '#f0f4f8';
   ctx.fillRect(0, 0, canvasEl.width, canvasEl.height);
-
   drawGrid();
 
-  // Rectangles drawn in topological order: parents first, children on top
-  const renderOrder = getRenderOrder();
-  for (const r of renderOrder)
-    drawRect(r, selectedType === 'rect' && r.id === selectedId);
+  getRenderOrder().forEach(r => drawRect(r, selectedType === 'rect' && r.id === selectedId));
+  arrows.forEach(a => drawArrow(a, selectedType === 'arrow' && a.id === selectedId));
 
-  // Arrows drawn on top of rectangles so they remain visible inside parent rects
-  for (const a of arrows)
-    drawArrow(a, selectedType === 'arrow' && a.id === selectedId);
-
-  // Arrow-draw preview
   if (arrowDraw) {
-    const { startX, startY, curX, curY } = arrowDraw;
-    const color = (mode === 'add-arrow') ? ARROW_COLORS.connected : (ARROW_COLORS[freeArrowType] || '#555');
-
+    const { startX: sx, startY: sy, curX: cx, curY: cy } = arrowDraw;
+    const color = mode === 'add-arrow' ? ARROW_COLORS.connected : (ARROW_COLORS[freeArrowType] || '#555');
     ctx.save();
-    ctx.strokeStyle = color;
-    ctx.fillStyle   = color;
-    ctx.lineWidth   = 2;
+    ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 2;
     ctx.setLineDash([7, 4]);
-    ctx.beginPath();
-    ctx.moveTo(startX, startY);
-    ctx.lineTo(curX, curY);
-    ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(cx, cy); ctx.stroke();
     ctx.setLineDash([]);
-    drawArrowHead(curX, curY, Math.atan2(curY - startY, curX - startX));
-
-    // Start anchor dot
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(startX, startY, 4, 0, Math.PI * 2);
-    ctx.fill();
-
-    // End snap indicator
-    const snap = findSnap(curX, curY, arrowDraw.startRectId);
+    drawArrowHead(cx, cy, Math.atan2(cy-sy, cx-sx));
+    ctx.beginPath(); ctx.arc(sx, sy, 4, 0, Math.PI*2); ctx.fill();
+    const snap = findSnap(cx, cy, arrowDraw.startRectId);
     if (snap) {
-      ctx.strokeStyle = color;
-      ctx.lineWidth   = 2;
-      ctx.beginPath();
-      ctx.arc(snap.x, snap.y, 7, 0, Math.PI * 2);
-      ctx.stroke();
+      ctx.strokeStyle = color; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(snap.x, snap.y, 7, 0, Math.PI*2); ctx.stroke();
     }
-
     ctx.restore();
   }
 }
@@ -551,28 +638,17 @@ function resizeCanvas() {
 // ─── Cursor ──────────────────────────────────────────────────
 
 function updateCursor(mx, my) {
-  if (mode !== 'select') {
-    canvasEl.style.cursor = 'crosshair';
-    return;
-  }
+  if (mode !== 'select') { canvasEl.style.cursor = 'crosshair'; return; }
   if (selectedType === 'rect') {
     const sr = rects.find(r => r.id === selectedId);
     if (sr) {
       const h = hitHandle(mx, my, sr);
-      if (h) {
-        const map = { nw: 'nw-resize', ne: 'ne-resize', se: 'se-resize', sw: 'sw-resize' };
-        canvasEl.style.cursor = map[h];
-        return;
-      }
+      if (h) { canvasEl.style.cursor = { nw:'nw-resize', ne:'ne-resize', se:'se-resize', sw:'sw-resize' }[h]; return; }
     }
   }
-  // Show grab cursor when hovering a waypoint handle of the selected arrow
   if (selectedType === 'arrow') {
     const sa = arrows.find(a => a.id === selectedId);
-    if (sa && hitWaypoint(mx, my, sa) >= 0) {
-      canvasEl.style.cursor = 'grab';
-      return;
-    }
+    if (sa && hitWaypoint(mx, my, sa) >= 0) { canvasEl.style.cursor = 'grab'; return; }
   }
   if (hitRect(mx, my))  { canvasEl.style.cursor = 'grab';    return; }
   if (hitArrow(mx, my)) { canvasEl.style.cursor = 'pointer'; return; }
@@ -582,727 +658,333 @@ function updateCursor(mx, my) {
 // ─── Status bar ──────────────────────────────────────────────
 
 function updateStatus() {
-  const btnRename = document.getElementById('btn-rename');
+  const btnRename     = document.getElementById('btn-rename');
+  const btnActi       = document.getElementById('btn-open-actigramme');
+  const btnCopy       = document.getElementById('btn-copy');
+
   if (!selectedId) {
     statusSel.textContent = '';
     if (btnRename) btnRename.disabled = true;
+    if (btnActi)   btnActi.disabled   = true;
+    if (btnCopy)   btnCopy.disabled   = true;
     return;
   }
   if (btnRename) btnRename.disabled = false;
   if (selectedType === 'rect') {
     const r = rects.find(r => r.id === selectedId);
-    statusSel.textContent = r ? `Rectangle : « ${r.label} »` : '';
+    statusSel.textContent = r ? 'Fonction\u00A0: «\u00A0' + (r.label || r.id) + '\u00A0»' : '';
+    if (btnActi) btnActi.disabled = false;
+    if (btnCopy) btnCopy.disabled = false;
   } else {
     const a = arrows.find(a => a.id === selectedId);
-    if (a) {
-      const typeLabel = TYPE_LABELS[a.arrowType] || a.arrowType;
-      statusSel.textContent = `Flèche (${typeLabel})${a.label ? ' : « ' + a.label + ' »' : ''}`;
-    }
+    if (a) statusSel.textContent = 'Flèche (' + (TYPE_LABELS[a.arrowType] || a.arrowType) + ')' + (a.label ? ' : «\u00A0' + a.label + '\u00A0»' : '');
+    if (btnActi) btnActi.disabled = true;
+    if (btnCopy) btnCopy.disabled = true;
   }
 }
 
 // ─── Mode management ─────────────────────────────────────────
 
 function setMode(newMode) {
-  mode      = newMode;
-  arrowDraw = null;
-
-  document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
-  const ids = { select: 'btn-select', 'add-rect': 'btn-add-rect', 'add-arrow': 'btn-add-arrow', 'add-free-arrow': 'btn-add-free-arrow' };
-  if (ids[newMode]) document.getElementById(ids[newMode]).classList.add('active');
-
-  const names = { select: 'Sélection', 'add-rect': 'Ajouter un rectangle', 'add-arrow': 'Dessiner une flèche', 'add-free-arrow': 'Flèche libre' };
-  statusMode.textContent = 'Mode : ' + (names[newMode] || newMode);
+  mode = newMode; arrowDraw = null;
+  document.querySelectorAll('.r-btn[data-mode]').forEach(b => b.classList.remove('active'));
+  const ids = { select:'btn-select', 'add-rect':'btn-add-rect', 'add-arrow':'btn-add-arrow', 'add-free-arrow':'btn-add-free-arrow' };
+  if (ids[newMode]) { const b = document.getElementById(ids[newMode]); if (b) b.classList.add('active'); }
+  const names = { select:'Sélection', 'add-rect':'Ajouter une fonction', 'add-arrow':'Connexion', 'add-free-arrow':'Flèche SADT libre' };
+  statusMode.textContent = 'Mode\u00A0: ' + (names[newMode] || newMode);
   statusHint.textContent = MODE_HINTS[newMode] || '';
-
   render();
 }
 
 // ─── Actions ─────────────────────────────────────────────────
 
 function addRect(x, y) {
+  saveHistory();
   const rect = {
-    id:       uid(),
-    x:        x - RECT_W_DEFAULT / 2,
-    y:        y - RECT_H_DEFAULT / 2,
-    width:    RECT_W_DEFAULT,
-    height:   RECT_H_DEFAULT,
-    label:    'Fonction',
-    parentId: null,
+    id: uid(),
+    x:  snapCoord(x - RECT_W_DEFAULT / 2),
+    y:  snapCoord(y - RECT_H_DEFAULT / 2),
+    width: RECT_W_DEFAULT, height: RECT_H_DEFAULT,
+    label: 'Fonction', parentId: null,
   };
   rects.push(rect);
-  selectedId   = rect.id;
-  selectedType = 'rect';
-  render();
-  updateStatus();
+  selectedId = rect.id; selectedType = 'rect';
+  render(); updateStatus();
 }
 
 function finishArrow(endX, endY, snap) {
-  const { startX, startY, startRectId, startAnchor } = arrowDraw;
-
-  // Determine arrowType
-  let arrowType;
-  if (mode === 'add-arrow') {
-    arrowType = 'connected';
-  } else {
-    arrowType = freeArrowType;
-  }
-
   arrows.push({
-    id:           uid(),
-    label:        '',
-    arrowType,
-    waypoints:    [],
-    startRectId:  startRectId  || null,
-    startAnchor:  startAnchor  || null,
-    startX,
-    startY,
-    endRectId:    snap ? snap.rectId : null,
-    endAnchor:    snap ? snap.anchor : null,
-    endX:         snap ? snap.x : endX,
-    endY:         snap ? snap.y : endY,
+    id: uid(), label: '',
+    arrowType:   mode === 'add-arrow' ? 'connected' : freeArrowType,
+    waypoints:   [],
+    startRectId: arrowDraw.startRectId || null,
+    startAnchor: arrowDraw.startAnchor || null,
+    startX: arrowDraw.startX, startY: arrowDraw.startY,
+    endRectId: snap ? snap.rectId : null,
+    endAnchor: snap ? snap.anchor : null,
+    endX: snap ? snap.x : endX, endY: snap ? snap.y : endY,
   });
-
   arrowDraw    = null;
-  selectedId   = arrows[arrows.length - 1].id;
+  selectedId   = arrows[arrows.length-1].id;
   selectedType = 'arrow';
-  render();
-  updateStatus();
-  statusHint.textContent = 'Flèche créée. Double-cliquez sur la flèche pour l\'étiqueter. Double-clic sur un segment pour ajouter un virage.';
-  setTimeout(() => { if (statusHint.textContent.startsWith('Flèche créée')) statusHint.textContent = MODE_HINTS[mode] || ''; }, 4000);
+  render(); updateStatus();
+  showStatusMsg('Flèche créée — Double-clic pour l\'étiqueter.');
 }
 
 function deleteSelected() {
   if (!selectedId) return;
+  saveHistory();
   if (selectedType === 'rect') {
-    // Unparent direct children before removing the rect
-    for (const r of rects) {
-      if (r.parentId === selectedId) r.parentId = null;
-    }
+    rects.forEach(r => { if (r.parentId === selectedId) r.parentId = null; });
     rects  = rects.filter(r => r.id !== selectedId);
     arrows = arrows.filter(a => a.startRectId !== selectedId && a.endRectId !== selectedId);
+    const tab = currentTab(); tab.rects = rects; tab.arrows = arrows;
   } else {
     arrows = arrows.filter(a => a.id !== selectedId);
+    currentTab().arrows = arrows;
   }
-  selectedId = selectedType = null;
-  render();
-  updateStatus();
+  selectedId = null; selectedType = null;
+  render(); updateStatus();
 }
 
 // ─── Fit-to-view ─────────────────────────────────────────────
 
-/** Reposition and scale all elements so the diagram fills the canvas with padding. */
 function fitToView() {
   if (rects.length === 0 && arrows.length === 0) return;
-
   const PAD = 60;
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-
-  for (const r of rects) {
-    minX = Math.min(minX, r.x);
-    minY = Math.min(minY, r.y);
-    maxX = Math.max(maxX, r.x + r.width);
-    maxY = Math.max(maxY, r.y + r.height);
-  }
-  for (const a of arrows) {
-    for (const p of getArrowPoints(a)) {
-      minX = Math.min(minX, p.x);
-      minY = Math.min(minY, p.y);
-      maxX = Math.max(maxX, p.x);
-      maxY = Math.max(maxY, p.y);
-    }
-  }
+  let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
+  rects.forEach(r => { minX=Math.min(minX,r.x); minY=Math.min(minY,r.y); maxX=Math.max(maxX,r.x+r.width); maxY=Math.max(maxY,r.y+r.height); });
+  arrows.forEach(a => getArrowPoints(a).forEach(p => { minX=Math.min(minX,p.x); minY=Math.min(minY,p.y); maxX=Math.max(maxX,p.x); maxY=Math.max(maxY,p.y); }));
   if (!isFinite(minX)) return;
-
-  const cw = maxX - minX || 1;
-  const ch = maxY - minY || 1;
-  const W  = canvasEl.width, H = canvasEl.height;
-  // Scale down to fit if necessary; never zoom in (max scale = 1)
-  const scale = Math.min((W - 2 * PAD) / cw, (H - 2 * PAD) / ch, 1);
-  const tx = PAD + (W - 2 * PAD - cw * scale) / 2 - minX * scale;
-  const ty = PAD + (H - 2 * PAD - ch * scale) / 2 - minY * scale;
-
-  for (const r of rects) {
-    r.x      = Math.round(r.x * scale + tx);
-    r.y      = Math.round(r.y * scale + ty);
-    r.width  = Math.round(r.width  * scale);
-    r.height = Math.round(r.height * scale);
-  }
-  for (const a of arrows) {
-    a.startX = Math.round(a.startX * scale + tx);
-    a.startY = Math.round(a.startY * scale + ty);
-    a.endX   = Math.round(a.endX   * scale + tx);
-    a.endY   = Math.round(a.endY   * scale + ty);
-    if (a.waypoints) {
-      a.waypoints = a.waypoints.map(wp => ({
-        x: Math.round(wp.x * scale + tx),
-        y: Math.round(wp.y * scale + ty),
-      }));
-    }
-  }
-
-  selectedId = selectedType = null;
-  render();
-  updateStatus();
+  const cw=maxX-minX||1, ch=maxY-minY||1, W=canvasEl.width, H=canvasEl.height;
+  const scale = Math.min((W-2*PAD)/cw, (H-2*PAD)/ch, 1);
+  const tx = PAD + (W-2*PAD-cw*scale)/2 - minX*scale;
+  const ty = PAD + (H-2*PAD-ch*scale)/2 - minY*scale;
+  rects.forEach(r => { r.x=Math.round(r.x*scale+tx); r.y=Math.round(r.y*scale+ty); r.width=Math.round(r.width*scale); r.height=Math.round(r.height*scale); });
+  arrows.forEach(a => {
+    a.startX=Math.round(a.startX*scale+tx); a.startY=Math.round(a.startY*scale+ty);
+    a.endX=Math.round(a.endX*scale+tx);     a.endY=Math.round(a.endY*scale+ty);
+    if (a.waypoints) a.waypoints = a.waypoints.map(wp => ({ x:Math.round(wp.x*scale+tx), y:Math.round(wp.y*scale+ty) }));
+  });
+  selectedId=null; selectedType=null; render(); updateStatus();
 }
 
 // ─── Auto Layout ─────────────────────────────────────────────
 
-/**
- * Compute orthogonal waypoints that form an elbow/Z-shaped path between two
- * anchor points, based on which sides the arrow connects from/to.
- *
- * @param {number} x1 - Start X
- * @param {number} y1 - Start Y
- * @param {string|null} side1 - Start side ('left'|'right'|'top'|'bottom'|null)
- * @param {number} x2 - End X
- * @param {number} y2 - End Y
- * @param {string|null} side2 - End side
- * @returns {Array<{x,y}>} Waypoints to insert between start and end
- */
 function computeOrthogonalWaypoints(x1, y1, side1, x2, y2, side2) {
-  // If endpoints are practically at the same position, no waypoints needed
-  if (Math.abs(x1 - x2) < 2 && Math.abs(y1 - y2) < 2) return [];
-
-  const hSides = new Set(['left', 'right']);
-  const vSides = new Set(['top', 'bottom']);
-
-  // Both horizontal exits (left/right ↔ left/right): Z-shape via vertical midpoint
-  if (hSides.has(side1) && hSides.has(side2)) {
-    const midX = Math.round((x1 + x2) / 2);
-    if (Math.abs(y1 - y2) < 2) return [];   // already horizontal, no bend needed
-    return [{ x: midX, y: y1 }, { x: midX, y: y2 }];
-  }
-
-  // Both vertical exits (top/bottom ↔ top/bottom): Z-shape via horizontal midpoint
-  if (vSides.has(side1) && vSides.has(side2)) {
-    const midY = Math.round((y1 + y2) / 2);
-    if (Math.abs(x1 - x2) < 2) return [];
-    return [{ x: x1, y: midY }, { x: x2, y: midY }];
-  }
-
-  // Mixed: horizontal start, vertical end → single corner
-  if (hSides.has(side1) && vSides.has(side2)) {
-    return [{ x: x2, y: y1 }];
-  }
-
-  // Mixed: vertical start, horizontal end → single corner
-  if (vSides.has(side1) && hSides.has(side2)) {
-    return [{ x: x1, y: y2 }];
-  }
-
-  // One side known, the other is a free endpoint: create an L-shape
-  if (hSides.has(side1) && !side2) {
-    // Exits horizontally, then turns to reach free endpoint
-    if (Math.abs(y1 - y2) < 2) return [];
-    return [{ x: x2, y: y1 }];
-  }
-  if (vSides.has(side1) && !side2) {
-    // Exits vertically, then turns to reach free endpoint
-    if (Math.abs(x1 - x2) < 2) return [];
-    return [{ x: x1, y: y2 }];
-  }
-  if (!side1 && hSides.has(side2)) {
-    if (Math.abs(y1 - y2) < 2) return [];
-    return [{ x: x1, y: y2 }];
-  }
-  if (!side1 && vSides.has(side2)) {
-    if (Math.abs(x1 - x2) < 2) return [];
-    return [{ x: x2, y: y1 }];
-  }
-
+  if (Math.abs(x1-x2)<2 && Math.abs(y1-y2)<2) return [];
+  const hS = new Set(['left','right']), vS = new Set(['top','bottom']);
+  if (hS.has(side1) && hS.has(side2)) { const midX=Math.round((x1+x2)/2); if(Math.abs(y1-y2)<2)return[]; return[{x:midX,y:y1},{x:midX,y:y2}]; }
+  if (vS.has(side1) && vS.has(side2)) { const midY=Math.round((y1+y2)/2); if(Math.abs(x1-x2)<2)return[]; return[{x:x1,y:midY},{x:x2,y:midY}]; }
+  if (hS.has(side1) && vS.has(side2)) return [{x:x2,y:y1}];
+  if (vS.has(side1) && hS.has(side2)) return [{x:x1,y:y2}];
+  if (hS.has(side1) && !side2) { if(Math.abs(y1-y2)<2)return[]; return[{x:x2,y:y1}]; }
+  if (vS.has(side1) && !side2) { if(Math.abs(x1-x2)<2)return[]; return[{x:x1,y:y2}]; }
+  if (!side1 && hS.has(side2)) { if(Math.abs(y1-y2)<2)return[]; return[{x:x1,y:y2}]; }
+  if (!side1 && vS.has(side2)) { if(Math.abs(x1-x2)<2)return[]; return[{x:x2,y:y1}]; }
   return [];
 }
 
-/**
- * Route all arrows with orthogonal (right-angle) paths for better readability.
- * Each arrow gets waypoints to create an elbow / Z-shaped path.
- * Anchors are first reset to the centre of their respective sides (t = 0.5),
- * then redistributed uniformly so that multiple arrows on the same side of a
- * rectangle are spread out instead of stacked at the centre.
- */
 function routeArrowsOrthogonal() {
-  // ── Step 1: reset all anchors to the centre of their side ────────────────
-  for (const a of arrows) {
+  arrows.forEach(a => {
     if (a.startAnchor) a.startAnchor = { side: a.startAnchor.side, t: 0.5 };
     if (a.endAnchor)   a.endAnchor   = { side: a.endAnchor.side,   t: 0.5 };
-  }
-
-  // ── Step 2: redistribute anchors uniformly per (rect, side) ─────────────
-  // Build a map: rectId → side → [ {arrow, role} ] where role is 'start'|'end'
-  const sideMap = new Map(); // key: `${rectId}:${side}`
-  for (const a of arrows) {
+  });
+  const sideMap = new Map();
+  arrows.forEach(a => {
     if (a.startRectId && a.startAnchor) {
-      const key = `${a.startRectId}:${a.startAnchor.side}`;
-      if (!sideMap.has(key)) sideMap.set(key, []);
-      sideMap.get(key).push({ arrow: a, role: 'start' });
+      const k = a.startRectId+':'+a.startAnchor.side;
+      if (!sideMap.has(k)) sideMap.set(k, []);
+      sideMap.get(k).push({ arrow: a, role: 'start' });
     }
     if (a.endRectId && a.endAnchor) {
-      const key = `${a.endRectId}:${a.endAnchor.side}`;
-      if (!sideMap.has(key)) sideMap.set(key, []);
-      sideMap.get(key).push({ arrow: a, role: 'end' });
+      const k = a.endRectId+':'+a.endAnchor.side;
+      if (!sideMap.has(k)) sideMap.set(k, []);
+      sideMap.get(k).push({ arrow: a, role: 'end' });
     }
-  }
-  // Assign evenly-spaced t values: t = (i+1) / (count+1)
-  for (const entries of sideMap.values()) {
+  });
+  sideMap.forEach(entries => {
     const count = entries.length;
-    entries.forEach(({ arrow, role }, i) => {
-      const t = (i + 1) / (count + 1);
-      if (role === 'start') arrow.startAnchor = { side: arrow.startAnchor.side, t };
-      else                  arrow.endAnchor   = { side: arrow.endAnchor.side,   t };
+    entries.forEach((entry, i) => {
+      const t = (i+1)/(count+1);
+      if (entry.role==='start') entry.arrow.startAnchor = { side: entry.arrow.startAnchor.side, t };
+      else                      entry.arrow.endAnchor   = { side: entry.arrow.endAnchor.side,   t };
     });
-  }
-
-  // ── Step 3: compute orthogonal waypoints for every arrow ─────────────────
-  for (const a of arrows) {
-    const { x1, y1, x2, y2 } = getArrowEndpoints(a);
-    const side1 = a.startAnchor ? a.startAnchor.side : null;
-    const side2 = a.endAnchor   ? a.endAnchor.side   : null;
-
-    let waypoints = computeOrthogonalWaypoints(x1, y1, side1, x2, y2, side2);
-
-    // ── Step 4: avoid crossing other rectangles ───────────────────────────
-    waypoints = avoidRectObstacles(waypoints, x1, y1, x2, y2,
-                                   a.startRectId, a.endRectId);
-
-    a.waypoints = waypoints;
-  }
+  });
+  arrows.forEach(a => {
+    const ep = getArrowEndpoints(a);
+    const s1 = a.startAnchor ? a.startAnchor.side : null;
+    const s2 = a.endAnchor   ? a.endAnchor.side   : null;
+    const wps = computeOrthogonalWaypoints(ep.x1, ep.y1, s1, ep.x2, ep.y2, s2);
+    a.waypoints = avoidRectObstacles(wps, ep.x1, ep.y1, ep.x2, ep.y2, a.startRectId, a.endRectId);
+  });
 }
 
-/**
- * Check whether a segment (px,py)→(qx,qy) intersects axis-aligned rectangle r.
- * Returns true if the segment passes through the interior of r.
- */
 function segmentIntersectsRect(px, py, qx, qy, r) {
-  // Use a simple parametric clip (Cohen–Sutherland–like) against the rect AABB.
-  const minX = r.x, maxX = r.x + r.width;
-  const minY = r.y, maxY = r.y + r.height;
-
-  // Horizontal segment
-  if (Math.abs(py - qy) < COORD_EPSILON) {
-    if (py <= minY || py >= maxY) return false;
-    const lo = Math.min(px, qx), hi = Math.max(px, qx);
-    return lo < maxX && hi > minX;
-  }
-  // Vertical segment
-  if (Math.abs(px - qx) < COORD_EPSILON) {
-    if (px <= minX || px >= maxX) return false;
-    const lo = Math.min(py, qy), hi = Math.max(py, qy);
-    return lo < maxY && hi > minY;
-  }
-  // Diagonal – use Liang-Barsky
-  const dx = qx - px, dy = qy - py;
-  let tMin = 0, tMax = 1;
-  const checks = [
-    [-dx, px - minX],
-    [ dx, maxX - px],
-    [-dy, py - minY],
-    [ dy, maxY - py],
-  ];
-  for (const [p, q] of checks) {
-    if (p === 0) { if (q < 0) return false; }
-    else {
-      const t = q / p;
-      if (p < 0) tMin = Math.max(tMin, t);
-      else       tMax = Math.min(tMax, t);
-    }
-    if (tMin > tMax) return false;
+  const minX=r.x, maxX=r.x+r.width, minY=r.y, maxY=r.y+r.height;
+  if (Math.abs(py-qy)<COORD_EPSILON) { if(py<=minY||py>=maxY)return false; const lo=Math.min(px,qx),hi=Math.max(px,qx); return lo<maxX&&hi>minX; }
+  if (Math.abs(px-qx)<COORD_EPSILON) { if(px<=minX||px>=maxX)return false; const lo=Math.min(py,qy),hi=Math.max(py,qy); return lo<maxY&&hi>minY; }
+  const dx=qx-px, dy=qy-py;
+  let tMin=0, tMax=1;
+  for (const [p2, q2] of [[-dx,px-minX],[dx,maxX-px],[-dy,py-minY],[dy,maxY-py]]) {
+    if (p2===0) { if(q2<0)return false; } else { const t=q2/p2; if(p2<0)tMin=Math.max(tMin,t); else tMax=Math.min(tMax,t); }
+    if (tMin>tMax) return false;
   }
   return true;
 }
 
-/**
- * Post-process an orthogonal waypoint list so that no segment passes through
- * a rectangle other than the arrow's own start/end rectangles.
- * When a crossing is detected a simple detour is inserted that passes outside
- * the blocking rectangle with a CHILD_PADDING margin.
- */
 function avoidRectObstacles(waypoints, x1, y1, x2, y2, startRectId, endRectId) {
-  const margin = CHILD_PADDING;
-  // Build the full point list (start + waypoints + end)
-  let pts = [{ x: x1, y: y1 }, ...waypoints, { x: x2, y: y2 }];
-
-  // Candidate obstacle rectangles (exclude the arrow's own endpoints)
+  const margin    = CHILD_PADDING;
+  let   pts       = [{ x:x1, y:y1 }, ...waypoints, { x:x2, y:y2 }];
   const obstacles = rects.filter(r => r.id !== startRectId && r.id !== endRectId);
   if (obstacles.length === 0) return waypoints;
-
-  let changed = true;
-  let iterations = 0;
+  let changed = true, iterations = 0;
   while (changed && iterations < MAX_OBSTACLE_ITER) {
-    changed = false;
-    iterations++;
+    changed = false; iterations++;
     const newPts = [pts[0]];
-    for (let i = 0; i < pts.length - 1; i++) {
-      const p = pts[i], q = pts[i + 1];
-      let blocked = null;
-      for (const r of obstacles) {
-        if (segmentIntersectsRect(p.x, p.y, q.x, q.y, r)) { blocked = r; break; }
-      }
-      if (!blocked) {
-        newPts.push(q);
-        continue;
-      }
+    for (let i = 0; i < pts.length-1; i++) {
+      const p = pts[i], q = pts[i+1];
+      let blocked = obstacles.find(r => segmentIntersectsRect(p.x,p.y,q.x,q.y,r)) || null;
+      if (!blocked) { newPts.push(q); continue; }
       changed = true;
-      // Determine detour: go around the blocking rectangle
-      const rLeft   = blocked.x - margin;
-      const rRight  = blocked.x + blocked.width  + margin;
-      const rTop    = blocked.y - margin;
-      const rBottom = blocked.y + blocked.height + margin;
-
-      // For a horizontal segment, detour above or below
-      if (Math.abs(p.y - q.y) < COORD_EPSILON) {
-        // Choose side closer to current y
-        const detourY = (Math.abs(p.y - rTop) < Math.abs(p.y - rBottom)) ? rTop : rBottom;
-        newPts.push({ x: p.x, y: detourY });
-        newPts.push({ x: q.x, y: detourY });
-        newPts.push(q);
-      } else if (Math.abs(p.x - q.x) < COORD_EPSILON) {
-        // For a vertical segment, detour left or right
-        const detourX = (Math.abs(p.x - rLeft) < Math.abs(p.x - rRight)) ? rLeft : rRight;
-        newPts.push({ x: detourX, y: p.y });
-        newPts.push({ x: detourX, y: q.y });
-        newPts.push(q);
-      } else {
-        // Diagonal (shouldn't happen in orthogonal routing, but handle gracefully)
-        newPts.push(q);
-      }
+      const rL=blocked.x-margin, rR=blocked.x+blocked.width+margin, rT=blocked.y-margin, rB=blocked.y+blocked.height+margin;
+      if (Math.abs(p.y-q.y)<COORD_EPSILON) { const dY=(Math.abs(p.y-rT)<Math.abs(p.y-rB))?rT:rB; newPts.push({x:p.x,y:dY}); newPts.push({x:q.x,y:dY}); newPts.push(q); }
+      else if (Math.abs(p.x-q.x)<COORD_EPSILON) { const dX=(Math.abs(p.x-rL)<Math.abs(p.x-rR))?rL:rR; newPts.push({x:dX,y:p.y}); newPts.push({x:dX,y:q.y}); newPts.push(q); }
+      else { newPts.push(q); }
     }
     pts = newPts;
   }
-
-  // Return only the interior waypoints (strip start/end)
-  return pts.slice(1, pts.length - 1);
+  return pts.slice(1, pts.length-1);
 }
 
-/**
- * Automatically arrange all rectangles in a clean grid and route arrows orthogonally.
- * – Top-level rects are placed in rows of columns.
- * – Sub-rectangles (children) keep their positions RELATIVE to their parent,
- *   so the user's manual layout inside each parent is preserved.
- * – Parent sizes are recomputed to encompass all their children.
- * – Arrows are routed with right-angle elbow paths (orthogonal routing).
- * – fitToView() is called at the end so the result is immediately visible.
- */
 function autoLayout() {
   if (rects.length === 0 && arrows.length === 0) return;
+  const isTopLevel = r => !r.parentId || !rects.find(p => p.id === r.parentId);
+  const topLevel   = rects.filter(isTopLevel);
 
-  /** Is a rect truly at the top level (no valid parent)? */
-  function isTopLevel(r) {
-    return !r.parentId || !rects.find(p => p.id === r.parentId);
-  }
-
-  const topLevel = rects.filter(isTopLevel);
-
-  // ── Phase 1: compute intrinsic sizes, bottom-up ──────────────────────────
-
-  /** Grow a leaf rectangle so its label fits without clipping. */
   function autoSizeRect(rect) {
-    const label     = rect.label || 'Fonction';
-    const savedFont = ctx.font;
-    ctx.font        = 'bold 14px Arial, sans-serif';
-
-    const H_PAD  = 16;  // horizontal inner padding (each side)
-    const V_PAD  = 12;  // vertical inner padding (each side)
-    const LINE_H = 18;  // px per text line
-
-    // Wrap at the current (or minimum) interior width
-    const measureW = Math.max(rect.width - 2 * H_PAD, RECT_W_DEFAULT - 2 * H_PAD);
-    const lines    = wrapText(label, measureW);
-
-    // Width needed to display the longest line without wrapping
-    const maxLineW = lines.length > 0 ? Math.max(...lines.map(l => ctx.measureText(l).width)) : 0;
-    const reqW     = maxLineW + 2 * H_PAD;
-
-    // Height needed for all wrapped lines
-    const reqH = lines.length * LINE_H + 2 * V_PAD;
-
-    ctx.font = savedFont;
-
-    // Grow only — never shrink below the current size or the default
-    rect.width  = Math.max(rect.width,  reqW,  RECT_W_DEFAULT);
-    rect.height = Math.max(rect.height, reqH,  RECT_H_DEFAULT);
+    const savedF = ctx.font; ctx.font = 'bold 14px Arial, sans-serif';
+    const lbl    = rect.label || 'Fonction';
+    const H_PAD=16, V_PAD=12, LINE_H=18;
+    const mW     = Math.max(rect.width-2*H_PAD, RECT_W_DEFAULT-2*H_PAD);
+    const lines  = wrapText(lbl, mW);
+    const maxW   = lines.length ? Math.max(...lines.map(l => ctx.measureText(l).width)) : 0;
+    ctx.font = savedF;
+    rect.width  = Math.max(rect.width,  maxW+2*H_PAD,   RECT_W_DEFAULT);
+    rect.height = Math.max(rect.height, lines.length*LINE_H+2*V_PAD, RECT_H_DEFAULT);
   }
 
-  /** Return true when at least two children overlap (with a CHILD_PADDING/2 margin). */
   function childrenOverlap(children) {
-    const margin = CHILD_PADDING / 2;
-    for (let i = 0; i < children.length; i++) {
-      for (let j = i + 1; j < children.length; j++) {
-        const a = children[i], b = children[j];
-        if (a.x - margin < b.x + b.width  + margin &&
-            a.x + a.width  + margin > b.x - margin &&
-            a.y - margin < b.y + b.height + margin &&
-            a.y + a.height + margin > b.y - margin) {
-          return true;
-        }
-      }
+    const m = CHILD_PADDING/2;
+    for (let i=0;i<children.length;i++) for (let j=i+1;j<children.length;j++) {
+      const a=children[i], b=children[j];
+      if(a.x-m<b.x+b.width+m&&a.x+a.width+m>b.x-m&&a.y-m<b.y+b.height+m&&a.y+a.height+m>b.y-m) return true;
     }
     return false;
   }
 
-  /**
-   * Redistribute children in a grid inside parent:
-   *   1 column  for 1–2 children
-   *   2 columns for 3–4 children
-   *   3 columns for 5+ children
-   * Starting position: parent.x + CHILD_PADDING, parent.y + PARENT_LABEL_H + CHILD_PADDING
-   */
   function redistributeChildren(parent, children) {
-    const n    = children.length;
-    const cols = n <= 2 ? 1 : n <= 4 ? 2 : 3;
-
-    let curX = parent.x + CHILD_PADDING;
-    let curY = parent.y + PARENT_LABEL_H + CHILD_PADDING;
-    let col  = 0;
-    let rowH = 0;
-
-    for (const child of children) {
-      const dx = curX - child.x;
-      const dy = curY - child.y;
-      child.x  = curX;
-      child.y  = curY;
-      moveChildren(child.id, dx, dy);   // keep descendants in sync
-
-      rowH = Math.max(rowH, child.height);
-      col++;
-      if (col === cols) {
-        curX  = parent.x + CHILD_PADDING;
-        curY += rowH + CHILD_PADDING;
-        rowH  = 0;
-        col   = 0;
-      } else {
-        curX += child.width + CHILD_PADDING;
-      }
-    }
+    const cols = children.length<=2?1:children.length<=4?2:3;
+    let curX=parent.x+CHILD_PADDING, curY=parent.y+PARENT_LABEL_H+CHILD_PADDING, col=0, rowH=0;
+    children.forEach(child => {
+      const dx=curX-child.x, dy=curY-child.y; child.x=curX; child.y=curY; moveChildren(child.id,dx,dy);
+      rowH=Math.max(rowH,child.height); col++;
+      if(col===cols){curX=parent.x+CHILD_PADDING;curY+=rowH+CHILD_PADDING;rowH=0;col=0;}
+      else{curX+=child.width+CHILD_PADDING;}
+    });
   }
 
-  /** Recursively compute sizes bottom-up, auto-sizing leaves and redistributing
-   *  children when they overlap or intrude on the parent's label area. */
   function computeSize(rect) {
     const children = rects.filter(r => r.parentId === rect.id);
-    if (children.length === 0) {
-      // Leaf rect: grow to fit label, then enforce minimum size
-      autoSizeRect(rect);
-      return;
-    }
-
-    for (const child of children) computeSize(child);
-
-    // Redistribute if children overlap or any child intrudes on the label strip
-    const needsRelayout = childrenOverlap(children) ||
-      children.some(c => c.y < rect.y + PARENT_LABEL_H + CHILD_PADDING);
-    if (needsRelayout) {
-      redistributeChildren(rect, children);
-    }
-
-    // Determine required parent size from children's (possibly new) positions
-    const relRight  = Math.max(...children.map(c => (c.x - rect.x) + c.width));
-    const relBottom = Math.max(...children.map(c => (c.y - rect.y) + c.height));
-
-    // Minimum height must fit the label header + at least one row of children
-    const maxChildH = children.length > 0 ? Math.max(...children.map(c => c.height)) : 0;
-    const minHeight = PARENT_LABEL_H + CHILD_PADDING + maxChildH + CHILD_PADDING;
-
-    rect.width  = Math.max(rect.width,  relRight  + CHILD_PADDING);
-    rect.height = Math.max(rect.height, relBottom + CHILD_PADDING, minHeight);
+    if (!children.length) { autoSizeRect(rect); return; }
+    children.forEach(computeSize);
+    if (childrenOverlap(children) || children.some(c => c.y < rect.y+PARENT_LABEL_H+CHILD_PADDING)) redistributeChildren(rect, children);
+    const relR = Math.max(...children.map(c => (c.x-rect.x)+c.width));
+    const relB = Math.max(...children.map(c => (c.y-rect.y)+c.height));
+    const minH = PARENT_LABEL_H+CHILD_PADDING+Math.max(...children.map(c=>c.height))+CHILD_PADDING;
+    rect.width  = Math.max(rect.width,  relR+CHILD_PADDING);
+    rect.height = Math.max(rect.height, relB+CHILD_PADDING, minH);
   }
 
-  for (const r of topLevel) computeSize(r);
+  topLevel.forEach(computeSize);
 
-  // ── Phase 2: assign positions for top-level rects only ───────────────────
-  // Children are moved by the same delta as their parent (relative positions preserved).
+  let bBMinX=Infinity, bBMinY=Infinity;
+  rects.forEach(r => { if(r.x<bBMinX)bBMinX=r.x; if(r.y<bBMinY)bBMinY=r.y; });
+  if(!isFinite(bBMinX))bBMinX=0; if(!isFinite(bBMinY))bBMinY=0;
 
-  // Capture bounding box BEFORE repositioning so free arrows can follow the shift.
-  let bboxBeforeMinX = Infinity, bboxBeforeMinY = Infinity;
-  for (const r of rects) {
-    if (r.x < bboxBeforeMinX) bboxBeforeMinX = r.x;
-    if (r.y < bboxBeforeMinY) bboxBeforeMinY = r.y;
-  }
-  if (!isFinite(bboxBeforeMinX)) bboxBeforeMinX = 0;
-  if (!isFinite(bboxBeforeMinY)) bboxBeforeMinY = 0;
+  const cols2=topLevel.length<=6?topLevel.length:Math.max(1,Math.ceil(Math.sqrt(topLevel.length)));
+  let rowX=LAYOUT_PADDING, rowY=LAYOUT_PADDING, maxRowH=0, colIdx=0;
+  topLevel.forEach(r => {
+    if(colIdx===cols2){rowY+=maxRowH+LAYOUT_V_SPACING;rowX=LAYOUT_PADDING;maxRowH=0;colIdx=0;}
+    const dx=rowX-r.x, dy=rowY-r.y; r.x=rowX; r.y=rowY; moveChildren(r.id,dx,dy);
+    rowX+=r.width+LAYOUT_H_SPACING; maxRowH=Math.max(maxRowH,r.height); colIdx++;
+  });
 
-  const cols      = topLevel.length <= 6
-    ? topLevel.length
-    : Math.max(1, Math.ceil(Math.sqrt(topLevel.length)));
-  let rowStartX   = LAYOUT_PADDING;
-  let rowStartY   = LAYOUT_PADDING;
-  let maxRowH     = 0;
-  let colIdx      = 0;
+  let bAMinX=Infinity, bAMinY=Infinity;
+  rects.forEach(r => { if(r.x<bAMinX)bAMinX=r.x; if(r.y<bAMinY)bAMinY=r.y; });
+  if(!isFinite(bAMinX))bAMinX=0; if(!isFinite(bAMinY))bAMinY=0;
 
-  for (const r of topLevel) {
-    if (colIdx === cols) {
-      rowStartY += maxRowH + LAYOUT_V_SPACING;
-      rowStartX  = LAYOUT_PADDING;
-      maxRowH    = 0;
-      colIdx     = 0;
-    }
-    const dx = rowStartX - r.x;
-    const dy = rowStartY - r.y;
-    r.x = rowStartX;
-    r.y = rowStartY;
-    // Move all children by the same delta so relative positions are preserved
-    moveChildren(r.id, dx, dy);
-    rowStartX += r.width + LAYOUT_H_SPACING;
-    maxRowH    = Math.max(maxRowH, r.height);
-    colIdx++;
-  }
+  const gdx=bAMinX-bBMinX, gdy=bAMinY-bBMinY;
+  arrows.forEach(a => {
+    if(!a.startRectId){a.startX+=gdx;a.startY+=gdy;}
+    if(!a.endRectId)  {a.endX+=gdx;  a.endY+=gdy;}
+  });
 
-  // Capture bounding box AFTER repositioning to compute the global shift.
-  let bboxAfterMinX = Infinity, bboxAfterMinY = Infinity;
-  for (const r of rects) {
-    if (r.x < bboxAfterMinX) bboxAfterMinX = r.x;
-    if (r.y < bboxAfterMinY) bboxAfterMinY = r.y;
-  }
-  if (!isFinite(bboxAfterMinX)) bboxAfterMinX = 0;
-  if (!isFinite(bboxAfterMinY)) bboxAfterMinY = 0;
-
-  const globalDx = bboxAfterMinX - bboxBeforeMinX;
-  const globalDy = bboxAfterMinY - bboxBeforeMinY;
-
-  // Shift free-arrow endpoints (those not attached to any rectangle) by the
-  // same global offset so they stay in the same relative position in the diagram.
-  for (const a of arrows) {
-    if (!a.startRectId) {
-      a.startX += globalDx;
-      a.startY += globalDy;
-    }
-    if (!a.endRectId) {
-      a.endX += globalDx;
-      a.endY += globalDy;
-    }
-  }
-
-  // ── Phase 3: route arrows with orthogonal (right-angle) paths ────────────
   routeArrowsOrthogonal();
-
-  selectedId = selectedType = null;
+  selectedId=null; selectedType=null;
   fitToView();
 }
 
-/**
- * Triggered by the "Terminer le SADT" button.
- * Shows a confirmation dialog, then runs autoLayout().
- */
 function finishSADT() {
-  const ok = confirm(
-    'Voulez-vous aligner automatiquement les éléments de votre diagramme SADT ?\n\n' +
-    '• Les rectangles de premier niveau seront réorganisés en grille.\n' +
-    '• Les sous-rectangles conservent leur position relative dans leur parent.\n' +
-    '• Les flèches seront routées en angles droits pour plus de lisibilité.\n' +
-    '• La vue sera ajustée au contenu.'
-  );
-  if (!ok) return;
+  if (!confirm('Aligner automatiquement le diagramme SADT ?\n\n• Fonctions en grille\n• Sous-fonctions conservent leur position relative\n• Flèches en angles droits\n• Vue ajustée')) return;
   autoLayout();
-  statusHint.textContent = '✅ Diagramme aligné automatiquement !';
-  setTimeout(() => { if (statusHint.textContent.startsWith('✅')) statusHint.textContent = MODE_HINTS[mode] || ''; }, STATUS_MSG_DELAY);
+  showStatusMsg('✅ Diagramme aligné !');
 }
 
-/**
- * Route all arrows orthogonally without moving any rectangles.
- * Useful to tidy up arrows after manually positioning elements.
- */
 function alignArrowsOnly() {
-  if (arrows.length === 0) return;
-  routeArrowsOrthogonal();
-  render();
-  statusHint.textContent = '✅ Flèches alignées en angles droits !';
-  setTimeout(() => { if (statusHint.textContent.startsWith('✅')) statusHint.textContent = MODE_HINTS[mode] || ''; }, STATUS_MSG_DELAY);
+  if (!arrows.length) return;
+  routeArrowsOrthogonal(); render();
+  showStatusMsg('✅ Flèches alignées en angles droits !');
 }
 
 // ─── Nested-rectangle helpers ────────────────────────────────
 
-/** Recursively collect ids of all descendants of a rect. */
 function getDescendants(id) {
-  const result = new Set();
-  const queue = [id];
+  const result = new Set(), queue = [id];
   while (queue.length) {
     const cur = queue.shift();
-    for (const r of rects) {
-      if (r.parentId === cur) { result.add(r.id); queue.push(r.id); }
-    }
+    rects.forEach(r => { if (r.parentId === cur) { result.add(r.id); queue.push(r.id); } });
   }
   return result;
 }
 
-/** Move all direct and indirect children of parentId by (dx, dy). */
 function moveChildren(parentId, dx, dy) {
-  for (const r of rects) {
-    if (r.parentId === parentId) {
-      r.x += dx;
-      r.y += dy;
-      moveChildren(r.id, dx, dy);
-    }
-  }
+  rects.forEach(r => { if (r.parentId === parentId) { r.x+=dx; r.y+=dy; moveChildren(r.id,dx,dy); } });
 }
 
-/** Expand parent rect so that child fits inside it (with padding).
- *  Recursively expands ancestor chain if needed. */
 function expandParentForChild(parent, child) {
-  const reqLeft   = child.x - CHILD_PADDING;
-  // Extra CHILD_PADDING below the header separator, matching the bottom/side gaps
-  const reqTop    = child.y - PARENT_LABEL_H - CHILD_PADDING;
-  const reqRight  = child.x + child.width  + CHILD_PADDING;
-  const reqBottom = child.y + child.height + CHILD_PADDING;
-
-  let changed = false;
-
-  if (reqLeft < parent.x) {
-    const d = parent.x - reqLeft;
-    parent.x -= d; parent.width += d;
-    changed = true;
-  }
-  if (reqTop < parent.y) {
-    const d = parent.y - reqTop;
-    parent.y -= d; parent.height += d;
-    changed = true;
-  }
-  if (reqRight > parent.x + parent.width) {
-    parent.width = reqRight - parent.x;
-    changed = true;
-  }
-  if (reqBottom > parent.y + parent.height) {
-    parent.height = reqBottom - parent.y;
-    changed = true;
-  }
-
-  if (changed && parent.parentId) {
-    const gp = rects.find(r => r.id === parent.parentId);
-    if (gp) expandParentForChild(gp, parent);
-  }
+  const reqL=child.x-CHILD_PADDING, reqT=child.y-PARENT_LABEL_H-CHILD_PADDING;
+  const reqR=child.x+child.width+CHILD_PADDING, reqB=child.y+child.height+CHILD_PADDING;
+  let changed=false;
+  if(reqL<parent.x)               {const d=parent.x-reqL;parent.x-=d;parent.width+=d;changed=true;}
+  if(reqT<parent.y)               {const d=parent.y-reqT;parent.y-=d;parent.height+=d;changed=true;}
+  if(reqR>parent.x+parent.width)  {parent.width=reqR-parent.x;changed=true;}
+  if(reqB>parent.y+parent.height) {parent.height=reqB-parent.y;changed=true;}
+  if(changed && parent.parentId) { const gp=rects.find(r=>r.id===parent.parentId); if(gp)expandParentForChild(gp,parent); }
 }
 
-/** Add a sub-rectangle centred inside the selected parent rect. */
 function addSubRect(parentId) {
   const parent = rects.find(r => r.id === parentId);
   if (!parent) return;
-
-  // Ensure the parent is large enough: header + top-padding + child + bottom-padding
-  const minW = RECT_W_DEFAULT + 2 * CHILD_PADDING;
-  const minH = RECT_H_DEFAULT + PARENT_LABEL_H + 2 * CHILD_PADDING;
-  if (parent.width  < minW) parent.width  = minW;
-  if (parent.height < minH) parent.height = minH;
-
-  // Centre the child in the interior area (below the header separator + top gap)
-  const interiorTop    = parent.y + PARENT_LABEL_H + CHILD_PADDING;
-  const availableH     = parent.height - PARENT_LABEL_H - 2 * CHILD_PADDING - RECT_H_DEFAULT;
-  const availableW     = parent.width  - 2 * CHILD_PADDING - RECT_W_DEFAULT;
-  const childX = parent.x + CHILD_PADDING + Math.max(0, availableW) / 2;
-  const childY = interiorTop              + Math.max(0, availableH) / 2;
-
-  const rect = {
-    id:       uid(),
-    x:        childX,
-    y:        childY,
-    width:    RECT_W_DEFAULT,
-    height:   RECT_H_DEFAULT,
-    label:    'Sous-fonction',
-    parentId: parentId,
-  };
-  rects.push(rect);
-  selectedId   = rect.id;
-  selectedType = 'rect';
-  render();
-  updateStatus();
+  const minW=RECT_W_DEFAULT+2*CHILD_PADDING, minH=RECT_H_DEFAULT+PARENT_LABEL_H+2*CHILD_PADDING;
+  if(parent.width<minW)parent.width=minW; if(parent.height<minH)parent.height=minH;
+  const iTop=parent.y+PARENT_LABEL_H+CHILD_PADDING;
+  const aH=parent.height-PARENT_LABEL_H-2*CHILD_PADDING-RECT_H_DEFAULT;
+  const aW=parent.width-2*CHILD_PADDING-RECT_W_DEFAULT;
+  saveHistory();
+  const rect={id:uid(),x:parent.x+CHILD_PADDING+Math.max(0,aW)/2,y:iTop+Math.max(0,aH)/2,width:RECT_W_DEFAULT,height:RECT_H_DEFAULT,label:'Sous-fonction',parentId};
+  rects.push(rect); selectedId=rect.id; selectedType='rect';
+  render(); updateStatus();
 }
 
 // ─── Drag & Resize ───────────────────────────────────────────
@@ -1311,390 +993,245 @@ function doDrag(mx, my) {
   if (!dragInfo) return;
   const r = rects.find(r => r.id === dragInfo.id);
   if (!r) return;
-  const newX = mx - dragInfo.ox;
-  const newY = my - dragInfo.oy;
-  const dx = newX - r.x;
-  const dy = newY - r.y;
-  r.x = newX;
-  r.y = newY;
-  // Move all children (direct and indirect) by the same delta
-  moveChildren(r.id, dx, dy);
-  // If this rect is a child, expand its parent if it drifts toward the edge
-  if (r.parentId) {
-    const parent = rects.find(p => p.id === r.parentId);
-    if (parent) expandParentForChild(parent, r);
-  }
+  const newX=snapCoord(mx-dragInfo.ox), newY=snapCoord(my-dragInfo.oy);
+  const dx=newX-r.x, dy=newY-r.y;
+  r.x=newX; r.y=newY; moveChildren(r.id,dx,dy);
+  if(r.parentId){const p=rects.find(p=>p.id===r.parentId);if(p)expandParentForChild(p,r);}
 }
 
 function doResize(mx, my) {
   if (!resizeInfo) return;
-  const r = rects.find(r => r.id === resizeInfo.id);
-  if (!r) return;
-  const { orig, handle, mx0, my0 } = resizeInfo;
-  const dx = mx - mx0, dy = my - my0;
-
-  switch (handle) {
-    case 'nw': {
-      const nw = Math.max(RECT_MIN_W, orig.width  - dx);
-      const nh = Math.max(RECT_MIN_H, orig.height - dy);
-      r.x = orig.x + orig.width  - nw;
-      r.y = orig.y + orig.height - nh;
-      r.width = nw; r.height = nh;
-      break;
-    }
-    case 'ne': {
-      const nh = Math.max(RECT_MIN_H, orig.height - dy);
-      r.y = orig.y + orig.height - nh;
-      r.width  = Math.max(RECT_MIN_W, orig.width + dx);
-      r.height = nh;
-      break;
-    }
-    case 'se':
-      r.width  = Math.max(RECT_MIN_W, orig.width  + dx);
-      r.height = Math.max(RECT_MIN_H, orig.height + dy);
-      break;
-    case 'sw': {
-      const nw = Math.max(RECT_MIN_W, orig.width  - dx);
-      r.x     = orig.x + orig.width - nw;
-      r.width = nw;
-      r.height = Math.max(RECT_MIN_H, orig.height + dy);
-      break;
-    }
-    default: break;
+  const r=rects.find(r=>r.id===resizeInfo.id); if(!r)return;
+  const {orig,handle,mx0,my0}=resizeInfo, dx=mx-mx0, dy=my-my0;
+  switch(handle){
+    case 'nw':{const nw=Math.max(RECT_MIN_W,orig.width-dx),nh=Math.max(RECT_MIN_H,orig.height-dy);r.x=orig.x+orig.width-nw;r.y=orig.y+orig.height-nh;r.width=nw;r.height=nh;break;}
+    case 'ne':{const nh=Math.max(RECT_MIN_H,orig.height-dy);r.y=orig.y+orig.height-nh;r.width=Math.max(RECT_MIN_W,orig.width+dx);r.height=nh;break;}
+    case 'se':r.width=Math.max(RECT_MIN_W,orig.width+dx);r.height=Math.max(RECT_MIN_H,orig.height+dy);break;
+    case 'sw':{const nw=Math.max(RECT_MIN_W,orig.width-dx);r.x=orig.x+orig.width-nw;r.width=nw;r.height=Math.max(RECT_MIN_H,orig.height+dy);break;}
+    default:break;
   }
 }
 
 // ─── Inline text editing ─────────────────────────────────────
 
 function startEditRect(id) {
-  const r = rects.find(r => r.id === id);
-  if (!r) return;
-  editId   = id;
-  editType = 'rect';
-  labelInput.value = r.label || '';
-  positionEditor(r.x, r.y + r.height / 2 - 14, r.width, 28);
-  labelEditor.style.display = 'block';
-  labelInput.focus();
-  labelInput.select();
+  const r=rects.find(r=>r.id===id); if(!r)return;
+  editId=id; editType='rect'; labelInput.value=r.label||'';
+  positionEditor(r.x, r.y+r.height/2-14, r.width, 28);
+  labelEditor.style.display='block'; labelInput.focus(); labelInput.select();
 }
 
 function startEditArrow(id) {
-  const a = arrows.find(a => a.id === id);
-  if (!a) return;
-  editId   = id;
-  editType = 'arrow';
-  labelInput.value = a.label || '';
-  const { x: lx, y: ly } = getArrowLabelPos(a);
-  positionEditor(lx - 70, ly - 14, 140, 28);
-  labelEditor.style.display = 'block';
-  labelInput.focus();
-  labelInput.select();
+  const a=arrows.find(a=>a.id===id); if(!a)return;
+  editId=id; editType='arrow'; labelInput.value=a.label||'';
+  const {x:lx,y:ly}=getArrowLabelPos(a);
+  positionEditor(lx-70, ly-14, 140, 28);
+  labelEditor.style.display='block'; labelInput.focus(); labelInput.select();
 }
 
 function renameSelected() {
   if (!selectedId) return;
-  if (selectedType === 'rect') startEditRect(selectedId);
-  else if (selectedType === 'arrow') startEditArrow(selectedId);
+  if (selectedType==='rect')  startEditRect(selectedId);
+  else if (selectedType==='arrow') startEditArrow(selectedId);
 }
 
 function positionEditor(x, y, w, h) {
-  labelEditor.style.left   = x + 'px';
-  labelEditor.style.top    = y + 'px';
-  labelEditor.style.width  = w + 'px';
-  labelEditor.style.height = h + 'px';
+  Object.assign(labelEditor.style, { left:x+'px', top:y+'px', width:w+'px', height:h+'px' });
 }
 
 function finishEditing() {
   if (!editId) return;
-  const val = labelInput.value.trim();
-  if (editType === 'rect') {
-    const r = rects.find(r => r.id === editId);
-    if (r) r.label = val;
+  const val=labelInput.value.trim();
+  if (editType==='rect') {
+    const r=rects.find(r=>r.id===editId); if(r){saveHistory();r.label=val;}
   } else {
-    const a = arrows.find(a => a.id === editId);
-    if (a) a.label = val;
+    const a=arrows.find(a=>a.id===editId); if(a){saveHistory();a.label=val;}
   }
-  editId = editType = null;
-  labelEditor.style.display = 'none';
-  render();
-  updateStatus();
+  editId=null; editType=null; labelEditor.style.display='none';
+  render(); updateStatus();
 }
 
 function cancelEditing() {
-  editId = editType = null;
-  labelEditor.style.display = 'none';
+  editId=null; editType=null; labelEditor.style.display='none';
 }
 
 // ─── Save / Load / Export ────────────────────────────────────
 
+function newDiagram() {
+  if ((rects.length>0||arrows.length>0) && !confirm('Créer un nouveau diagramme dans un nouvel onglet ?')) return;
+  addNewTab('Nouveau diagramme', 'actigramme');
+  showStatusMsg('Nouveau diagramme créé dans un nouvel onglet.');
+}
+
 function saveJSON() {
-  const data = JSON.stringify({ rects, arrows, nextId: _id }, null, 2);
-  const blob = new Blob([data], { type: 'application/json' });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a');
-  a.href = url; a.download = 'sadt-diagram.json'; a.click();
+  const tab=currentTab();
+  const data=JSON.stringify({rects,arrows,nextId:_id,tabLabel:tab.label,tabType:tab.type},null,2);
+  const blob=new Blob([data],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url; a.download='sadt-diagram.json'; a.click();
   URL.revokeObjectURL(url);
 }
 
 function loadJSON(file) {
-  const reader = new FileReader();
-  reader.onload = e => {
+  const reader=new FileReader();
+  reader.onload=e=>{
     try {
-      const data = JSON.parse(e.target.result);
-      rects  = data.rects  || [];
-      arrows = data.arrows || [];
-      const allNums = [...rects, ...arrows]
-        .map(o => parseInt(o.id.replace(/^\D+/, ''), 10))
-        .filter(n => !isNaN(n));
-      _id = allNums.length ? Math.max(...allNums) + 1 : 1;
-      if (data.nextId && data.nextId > _id) _id = data.nextId;
-      selectedId = selectedType = null;
-      setMode('select');
-      render();
-      updateStatus();
-    } catch (err) {
-      alert('Erreur lors du chargement : ' + err.message);
-    }
+      const data=JSON.parse(e.target.result);
+      const allNums=[...(data.rects||[]),...(data.arrows||[])].map(o=>parseInt(o.id.replace(/^\D+/,''),10)).filter(n=>!isNaN(n));
+      const maxId=allNums.length?Math.max(...allNums):0;
+      if(maxId+1>_id)_id=maxId+1; if(data.nextId&&data.nextId>_id)_id=data.nextId;
+      const label=data.tabLabel||file.name.replace(/\.json$/i,'')||'Diagramme';
+      const newTab=createTab(label, data.tabType||'actigramme', null);
+      newTab.rects=data.rects||[]; newTab.arrows=data.arrows||[]; newTab.nextId=_id;
+      tabs.push(newTab); switchToTab(newTab.id);
+      showStatusMsg('✅ Diagramme chargé\u00A0: '+label);
+    } catch(err) { alert('Erreur lors du chargement\u00A0: '+err.message); }
   };
   reader.readAsText(file);
 }
 
 function exportPNG() {
-  // Temporarily clear selection for a clean export
-  const prevId = selectedId, prevType = selectedType;
-  selectedId = selectedType = null;
-  render();
-  const url = canvasEl.toDataURL('image/png');
-  const a   = document.createElement('a');
-  a.href = url; a.download = 'sadt-diagram.png'; a.click();
-  selectedId = prevId; selectedType = prevType;
-  render();
+  const prevId=selectedId, prevType=selectedType;
+  selectedId=null; selectedType=null; render();
+  const a=document.createElement('a');
+  a.href=canvasEl.toDataURL('image/png'); a.download='sadt-diagram.png'; a.click();
+  selectedId=prevId; selectedType=prevType; render();
 }
 
 // ─── Mouse helpers ───────────────────────────────────────────
 
 function getPos(e) {
-  const rect = canvasEl.getBoundingClientRect();
-  return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  const rect=canvasEl.getBoundingClientRect();
+  return {x:e.clientX-rect.left, y:e.clientY-rect.top};
 }
 
 // ─── Mouse events ────────────────────────────────────────────
 
 canvasEl.addEventListener('mousedown', e => {
-  if (e.button !== 0) return;
+  if (e.button!==0) return;
   if (editId) finishEditing();
-  const { x, y } = getPos(e);
-  mdX = x; mdY = y; moved = false;
+  const {x,y}=getPos(e); mdX=x; mdY=y; moved=false;
 
-  // ── Select mode ─────────────────────────────────────────────
-  if (mode === 'select') {
-    // Resize handle?
-    if (selectedType === 'rect') {
-      const sr = rects.find(r => r.id === selectedId);
-      if (sr) {
-        const h = hitHandle(x, y, sr);
-        if (h) {
-          isResizing = true;
-          resizeInfo = { id: sr.id, handle: h, mx0: x, my0: y, orig: { ...sr } };
-          return;
-        }
-      }
+  if (mode==='select') {
+    if (selectedType==='rect') {
+      const sr=rects.find(r=>r.id===selectedId);
+      if (sr) { const h=hitHandle(x,y,sr); if(h){isResizing=true;resizeInfo={id:sr.id,handle:h,mx0:x,my0:y,orig:{...sr}};return;} }
     }
-
-    // Waypoint drag on the currently selected arrow?
-    if (selectedType === 'arrow') {
-      const sa = arrows.find(a => a.id === selectedId);
-      if (sa) {
-        const wpIdx = hitWaypoint(x, y, sa);
-        if (wpIdx >= 0) {
-          waypointDrag = { arrowId: sa.id, wpIdx };
-          return;
-        }
-      }
+    if (selectedType==='arrow') {
+      const sa=arrows.find(a=>a.id===selectedId);
+      if (sa) { const wi=hitWaypoint(x,y,sa); if(wi>=0){waypointDrag={arrowId:sa.id,wpIdx:wi};return;} }
     }
-
-    // Arrow? (checked before rect so arrows inside parent rects can be selected/deleted)
-    const aId = hitArrow(x, y);
-    if (aId) {
-      selectedId   = aId;
-      selectedType = 'arrow';
-      render(); updateStatus(); return;
-    }
-
-    // Rect?
-    const rId = hitRect(x, y);
+    const aId=hitArrow(x,y);
+    if (aId) { selectedId=aId; selectedType='arrow'; render(); updateStatus(); return; }
+    const rId=hitRect(x,y);
     if (rId) {
-      const r = rects.find(r => r.id === rId);
-      selectedId   = rId;
-      selectedType = 'rect';
-      isDragging   = true;
-      dragInfo     = { id: rId, ox: x - r.x, oy: y - r.y };
+      const r=rects.find(r=>r.id===rId);
+      selectedId=rId; selectedType='rect'; isDragging=true; dragInfo={id:rId,ox:x-r.x,oy:y-r.y};
       render(); updateStatus(); return;
     }
-
-    // Deselect
-    selectedId = selectedType = null;
-    render(); updateStatus();
-    return;
+    selectedId=null; selectedType=null; render(); updateStatus(); return;
   }
 
-  // ── Add-rect mode ────────────────────────────────────────────
-  if (mode === 'add-rect') {
-    addRect(x, y);
-    setMode('select');
-    return;
-  }
+  if (mode==='add-rect') { addRect(x,y); setMode('select'); return; }
 
-  // ── Arrow-drawing modes ──────────────────────────────────────
-  if (mode === 'add-arrow' || mode === 'add-free-arrow') {
+  if (mode==='add-arrow'||mode==='add-free-arrow') {
     if (!arrowDraw) {
-      // First click: start arrow
-      const snap = findSnap(x, y);
-      arrowDraw = snap
-        ? { startX: snap.x, startY: snap.y, startRectId: snap.rectId, startAnchor: snap.anchor, curX: snap.x, curY: snap.y }
-        : { startX: x, startY: y, startRectId: null, startAnchor: null, curX: x, curY: y };
+      const snap=findSnap(x,y);
+      arrowDraw=snap?{startX:snap.x,startY:snap.y,startRectId:snap.rectId,startAnchor:snap.anchor,curX:snap.x,curY:snap.y}
+                    :{startX:x,startY:y,startRectId:null,startAnchor:null,curX:x,curY:y};
       render();
     } else {
-      // Second click: end arrow
-      const snap = findSnap(x, y, arrowDraw.startRectId);
-      finishArrow(x, y, snap);
+      const snap=findSnap(x,y,arrowDraw.startRectId);
+      saveHistory(); finishArrow(x,y,snap);
     }
   }
 });
 
 canvasEl.addEventListener('mousemove', e => {
-  const { x, y } = getPos(e);
-  if (Math.abs(x - mdX) > 3 || Math.abs(y - mdY) > 3) moved = true;
+  const {x,y}=getPos(e);
+  if(Math.abs(x-mdX)>3||Math.abs(y-mdY)>3) moved=true;
 
-  if (isResizing && resizeInfo) { doResize(x, y); render(); return; }
-  if (isDragging && dragInfo)   { doDrag(x, y);   render(); return; }
+  document.getElementById('nav-coords').textContent='x '+Math.round(x)+', y '+Math.round(y);
 
-  // Waypoint dragging
-  if (waypointDrag) {
-    const a = arrows.find(a => a.id === waypointDrag.arrowId);
-    if (a && a.waypoints) {
-      a.waypoints[waypointDrag.wpIdx] = { x, y };
-      render();
-    }
+  if(isResizing&&resizeInfo){doResize(x,y);render();return;}
+  if(isDragging&&dragInfo)  {doDrag(x,y);  render();return;}
+
+  if(waypointDrag){
+    const a=arrows.find(a=>a.id===waypointDrag.arrowId);
+    if(a&&a.waypoints){a.waypoints[waypointDrag.wpIdx]={x,y};render();}
     return;
   }
-
-  if (arrowDraw) {
-    const snap = findSnap(x, y, arrowDraw.startRectId);
-    arrowDraw.curX = snap ? snap.x : x;
-    arrowDraw.curY = snap ? snap.y : y;
-    render();
+  if(arrowDraw){
+    const snap=findSnap(x,y,arrowDraw.startRectId);
+    arrowDraw.curX=snap?snap.x:x; arrowDraw.curY=snap?snap.y:y; render();
   }
-
-  updateCursor(x, y);
+  updateCursor(x,y);
 });
 
 canvasEl.addEventListener('mouseup', e => {
-  if (e.button !== 0) return;
-
-  // Drag-to-nest: when a rect is dropped, determine its parent by position
-  if (isDragging && dragInfo && moved) {
-    const dragged = rects.find(r => r.id === dragInfo.id);
-    if (dragged) {
-      const cx = dragged.x + dragged.width  / 2;
-      const cy = dragged.y + dragged.height / 2;
-      const descendants = getDescendants(dragged.id);
-      let newParentId = null;
-
-      // Find the innermost (topmost-drawn) rect that contains the centre
-      const order = getRenderOrder();
-      for (let i = order.length - 1; i >= 0; i--) {
-        const r = order[i];
-        if (r.id === dragged.id || descendants.has(r.id)) continue;
-        if (cx >= r.x && cx <= r.x + r.width && cy >= r.y && cy <= r.y + r.height) {
-          newParentId = r.id;
-          break;
-        }
+  if(e.button!==0) return;
+  if(isDragging&&dragInfo&&moved){
+    const dragged=rects.find(r=>r.id===dragInfo.id);
+    if(dragged){
+      const cx=dragged.x+dragged.width/2, cy=dragged.y+dragged.height/2;
+      const desc=getDescendants(dragged.id);
+      let newParentId=null;
+      const order=getRenderOrder();
+      for(let i=order.length-1;i>=0;i--){
+        const r=order[i];
+        if(r.id===dragged.id||desc.has(r.id))continue;
+        if(cx>=r.x&&cx<=r.x+r.width&&cy>=r.y&&cy<=r.y+r.height){newParentId=r.id;break;}
       }
-
-      if (newParentId !== dragged.parentId) {
-        dragged.parentId = newParentId;
-        if (newParentId) {
-          const newParent = rects.find(r => r.id === newParentId);
-          if (newParent) expandParentForChild(newParent, dragged);
-        }
+      if(newParentId!==dragged.parentId){
+        dragged.parentId=newParentId;
+        if(newParentId){const np=rects.find(r=>r.id===newParentId);if(np)expandParentForChild(np,dragged);}
         render();
       }
     }
   }
-
-  isDragging = false; dragInfo   = null;
-  isResizing = false; resizeInfo = null;
-  waypointDrag = null;
+  isDragging=false; dragInfo=null; isResizing=false; resizeInfo=null; waypointDrag=null;
 });
 
 canvasEl.addEventListener('dblclick', e => {
-  const { x, y } = getPos(e);
-  if (mode !== 'select') return;
+  const {x,y}=getPos(e); if(mode!=='select')return;
 
-  // Arrow interactions checked before rect so arrows inside parent rects remain accessible
-  const aId = hitArrowLabel(x, y) || hitArrow(x, y);
-  if (aId) {
-    const arrow = arrows.find(a => a.id === aId);
-
-    // Near label → edit label
-    if (hitArrowLabel(x, y) === aId) {
-      startEditArrow(aId);
-      return;
-    }
-
-    // On an existing waypoint → remove it
-    const wpIdx = hitWaypoint(x, y, arrow);
-    if (wpIdx >= 0) {
-      arrow.waypoints.splice(wpIdx, 1);
-      selectedId = aId; selectedType = 'arrow';
-      render(); updateStatus();
-      return;
-    }
-
-    // On a segment → add a waypoint at this position
-    if (!arrow.waypoints) arrow.waypoints = [];
-    const pts = getArrowPoints(arrow);
-    for (let j = 0; j < pts.length - 1; j++) {
-      if (ptSegDist(x, y, pts[j].x, pts[j].y, pts[j + 1].x, pts[j + 1].y) < 8) {
-        arrow.waypoints.splice(j, 0, { x, y });
-        selectedId = aId; selectedType = 'arrow';
-        render(); updateStatus();
-        return;
+  const aId=hitArrowLabel(x,y)||hitArrow(x,y);
+  if(aId){
+    const arrow=arrows.find(a=>a.id===aId);
+    if(hitArrowLabel(x,y)===aId){startEditArrow(aId);return;}
+    const wi=hitWaypoint(x,y,arrow);
+    if(wi>=0){arrow.waypoints.splice(wi,1);selectedId=aId;selectedType='arrow';render();updateStatus();return;}
+    if(!arrow.waypoints)arrow.waypoints=[];
+    const pts=getArrowPoints(arrow);
+    for(let j=0;j<pts.length-1;j++){
+      if(ptSegDist(x,y,pts[j].x,pts[j].y,pts[j+1].x,pts[j+1].y)<8){
+        arrow.waypoints.splice(j,0,{x,y});selectedId=aId;selectedType='arrow';render();updateStatus();return;
       }
     }
-
-    // Fallback → edit label
-    startEditArrow(aId);
-    return;
+    startEditArrow(aId); return;
   }
 
-  const rId = hitRect(x, y);
-  if (rId) { startEditRect(rId); return; }
+  const rId=hitRect(x,y);
+  if(rId){
+    if(e.ctrlKey||e.metaKey){const r=rects.find(r=>r.id===rId);openActigramme(r);return;}
+    startEditRect(rId);
+  }
 });
 
-// Right-click on a waypoint of the selected arrow removes it
 canvasEl.addEventListener('contextmenu', e => {
-  const { x, y } = getPos(e);
-  if (selectedType === 'arrow') {
-    const sa = arrows.find(a => a.id === selectedId);
-    if (sa) {
-      const wpIdx = hitWaypoint(x, y, sa);
-      if (wpIdx >= 0) {
-        e.preventDefault();
-        sa.waypoints.splice(wpIdx, 1);
-        render();
-        return;
-      }
-    }
+  const {x,y}=getPos(e);
+  if(selectedType==='arrow'){
+    const sa=arrows.find(a=>a.id===selectedId);
+    if(sa){const wi=hitWaypoint(x,y,sa);if(wi>=0){e.preventDefault();sa.waypoints.splice(wi,1);render();return;}}
   }
 });
 
 // ─── Label input events ──────────────────────────────────────
 
 labelInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter')  { finishEditing(); }
-  if (e.key === 'Escape') { cancelEditing(); }
+  if(e.key==='Enter') finishEditing();
+  if(e.key==='Escape') cancelEditing();
   e.stopPropagation();
 });
 labelInput.addEventListener('blur', finishEditing);
@@ -1702,66 +1239,206 @@ labelInput.addEventListener('blur', finishEditing);
 // ─── Keyboard shortcuts ──────────────────────────────────────
 
 document.addEventListener('keydown', e => {
-  if (editId) return;  // Let text input handle keys
-
-  if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveJSON(); return; }
-  if ((e.ctrlKey || e.metaKey) && e.key === 'o') { e.preventDefault(); document.getElementById('file-input').click(); return; }
-
-  switch (e.key) {
-    case 'Delete':
-    case 'Backspace': deleteSelected(); break;
-
+  if(editId) return;
+  const ctrl=e.ctrlKey||e.metaKey;
+  if(ctrl&&e.key==='s'){e.preventDefault();saveJSON();return;}
+  if(ctrl&&e.key==='o'){e.preventDefault();document.getElementById('file-input').click();return;}
+  if(ctrl&&e.key==='z'){e.preventDefault();undo();return;}
+  if(ctrl&&(e.key==='y'||e.key==='Y')){e.preventDefault();redo();return;}
+  if(ctrl&&e.key==='c'){e.preventDefault();copySelected();return;}
+  if(ctrl&&e.key==='v'){e.preventDefault();pasteClipboard();return;}
+  switch(e.key){
+    case 'Delete':case 'Backspace':deleteSelected();break;
     case 'Escape':
-      if (arrowDraw) { arrowDraw = null; render(); }
-      else if (mode !== 'select') { setMode('select'); }
-      else { selectedId = selectedType = null; render(); updateStatus(); }
+      if(arrowDraw){arrowDraw=null;render();}
+      else if(mode!=='select'){setMode('select');}
+      else{selectedId=null;selectedType=null;render();updateStatus();}
       break;
-
-    case 's': case 'S': if (!e.ctrlKey && !e.metaKey) setMode('select'); break;
-    case 'r': case 'R': setMode('add-rect'); break;
-    case 'a': case 'A': setMode('add-arrow'); break;
-    case 'f': case 'F': setMode('add-free-arrow'); break;
-    case 'n': case 'N': renameSelected(); break;
-    case 'v': case 'V': fitToView(); break;
-    case 'l': case 'L': autoLayout(); break;
-    case 'q': case 'Q': alignArrowsOnly(); break;
+    case 's':case 'S':if(!ctrl)setMode('select');break;
+    case 'r':case 'R':if(!ctrl)setMode('add-rect');break;
+    case 'a':case 'A':if(!ctrl)setMode('add-arrow');break;
+    case 'f':case 'F':if(!ctrl)setMode('add-free-arrow');break;
+    case 'n':case 'N':if(!ctrl)renameSelected();break;
+    case 'v':case 'V':if(!ctrl)fitToView();break;
+    case 'l':case 'L':if(!ctrl)autoLayout();break;
+    case 'q':case 'Q':if(!ctrl)alignArrowsOnly();break;
   }
 });
 
-// ─── Toolbar wiring ──────────────────────────────────────────
+// ─── Explorer ────────────────────────────────────────────────
 
-function setupToolbar() {
-  document.getElementById('btn-select').addEventListener('click',          () => setMode('select'));
-  document.getElementById('btn-add-rect').addEventListener('click',        () => setMode('add-rect'));
-  document.getElementById('btn-add-arrow').addEventListener('click',       () => setMode('add-arrow'));
-  document.getElementById('btn-add-free-arrow').addEventListener('click',  () => setMode('add-free-arrow'));
-  document.getElementById('btn-rename').addEventListener('click',          renameSelected);
-  document.getElementById('btn-delete').addEventListener('click',          deleteSelected);
-  document.getElementById('btn-fit-view').addEventListener('click',        fitToView);
-  document.getElementById('btn-auto-layout').addEventListener('click',     autoLayout);
-  document.getElementById('btn-align-arrows').addEventListener('click',    alignArrowsOnly);
-  document.getElementById('btn-finish-sadt').addEventListener('click',     finishSADT);
-  document.getElementById('btn-save').addEventListener('click',            saveJSON);
-  document.getElementById('btn-export-png').addEventListener('click',      exportPNG);
-
-  document.getElementById('btn-add-sub-rect').addEventListener('click', () => {
-    if (selectedType === 'rect') {
-      addSubRect(selectedId);
-    } else {
-      statusHint.textContent = 'Sélectionnez d\'abord un rectangle pour y ajouter un sous-rectangle.';
-      setTimeout(() => { statusHint.textContent = MODE_HINTS[mode] || ''; }, 3000);
+function setupExplorer() {
+  const rootItem     = document.getElementById('tree-root');
+  const rootCaret    = document.getElementById('tree-root-caret');
+  const rootChildren = document.getElementById('tree-root-children');
+  if(rootItem){
+    rootItem.addEventListener('click',()=>{
+      const exp=rootItem.dataset.expanded==='true';
+      rootItem.dataset.expanded=exp?'false':'true';
+      if(rootChildren)rootChildren.style.display=exp?'none':'';
+      if(rootCaret)rootCaret.textContent=exp?'\u25B8':'\u25BE';
+    });
+  }
+  document.querySelectorAll('.tree-leaf').forEach(item=>{
+    item.addEventListener('dragstart',e=>{
+      e.dataTransfer.setData('text/plain',item.dataset.createType||'rect');
+      e.dataTransfer.effectAllowed='copy'; item.style.opacity='0.5';
+    });
+    item.addEventListener('dragend',()=>{item.style.opacity='';});
+  });
+  container.addEventListener('dragover',e=>{e.preventDefault();e.dataTransfer.dropEffect='copy';container.classList.add('drag-over');});
+  container.addEventListener('dragleave',e=>{if(!container.contains(e.relatedTarget))container.classList.remove('drag-over');});
+  container.addEventListener('drop',e=>{
+    e.preventDefault(); container.classList.remove('drag-over');
+    const type=e.dataTransfer.getData('text/plain');
+    const cr=canvasEl.getBoundingClientRect();
+    const dropX=e.clientX-cr.left, dropY=e.clientY-cr.top;
+    if(type==='pointer'){setMode('select');return;}
+    saveHistory();
+    if(type==='rect'||type==='graph'||type==='mecs'){
+      addRect(dropX,dropY);
+      const lblMap={graph:'Graphe',mecs:'MECS'};
+      if(lblMap[type]){const r=rects.find(r=>r.id===selectedId);if(r)r.label=lblMap[type];}
+    } else if(['input','output','control','mechanism'].includes(type)){
+      freeArrowType=type;
+      const len=60; let ex=dropX, ey=dropY;
+      if(type==='input'||type==='output')ex+=len;
+      else if(type==='control')ey+=len;
+      else if(type==='mechanism')ey-=len;
+      arrows.push({id:uid(),label:'',arrowType:type,waypoints:[],startRectId:null,startAnchor:null,startX:dropX,startY:dropY,endRectId:null,endAnchor:null,endX:ex,endY:ey});
+      selectedId=arrows[arrows.length-1].id; selectedType='arrow';
+      const tab=currentTab(); tab.rects=rects; tab.arrows=arrows;
     }
+    setMode('select'); render(); updateStatus();
+  });
+}
+
+// ─── Explorer resizer ────────────────────────────────────────
+
+function setupExplorerResizer() {
+  const resizer=document.getElementById('explorer-resizer');
+  const explorer=document.getElementById('explorer');
+  if(!resizer||!explorer) return;
+  let resizing=false;
+  resizer.addEventListener('mousedown',e=>{resizing=true;resizer.classList.add('active');e.preventDefault();});
+  document.addEventListener('mousemove',e=>{
+    if(!resizing) return;
+    const nw=e.clientX-explorer.getBoundingClientRect().left;
+    if(nw>=120&&nw<=400){explorer.style.width=nw+'px';resizeCanvas();}
+  });
+  document.addEventListener('mouseup',()=>{if(!resizing)return;resizing=false;resizer.classList.remove('active');});
+}
+
+// ─── Ribbon wiring ───────────────────────────────────────────
+
+function setupRibbon() {
+  document.querySelectorAll('.r-tab').forEach(tab=>{
+    tab.addEventListener('click',()=>{
+      document.querySelectorAll('.r-tab').forEach(t=>t.classList.remove('active'));
+      document.querySelectorAll('.r-panel').forEach(p=>p.classList.remove('active'));
+      tab.classList.add('active');
+      const panel=document.getElementById('r-panel-'+tab.dataset.panel);
+      if(panel)panel.classList.add('active');
+    });
   });
 
-  document.getElementById('btn-load').addEventListener('click', () =>
-    document.getElementById('file-input').click()
-  );
-  document.getElementById('file-input').addEventListener('change', e => {
-    if (e.target.files[0]) { loadJSON(e.target.files[0]); e.target.value = ''; }
+  document.querySelectorAll('.r-btn[data-mode]').forEach(btn=>{
+    btn.addEventListener('click',()=>setMode(btn.dataset.mode));
   });
 
-  document.getElementById('arrow-type-select').addEventListener('change', e => {
-    freeArrowType = e.target.value;
+  const sel=document.getElementById('arrow-type-select');
+  if(sel)sel.addEventListener('change',e=>{freeArrowType=e.target.value;});
+
+  const wire=(id,fn)=>{const el=document.getElementById(id);if(el)el.addEventListener('click',fn);};
+
+  wire('btn-add-sub-rect',()=>{
+    if(selectedType==='rect')addSubRect(selectedId);
+    else showStatusMsg('Sélectionnez d\'abord une fonction pour y ajouter une sous-fonction.');
+  });
+  wire('btn-rename',       renameSelected);
+  wire('btn-delete',       deleteSelected);
+  wire('btn-undo',         undo);
+  wire('btn-redo',         redo);
+  wire('btn-copy',         copySelected);
+  wire('btn-paste',        pasteClipboard);
+  wire('btn-fit-view',     fitToView);
+  wire('btn-fit-view2',    fitToView);
+  wire('btn-auto-layout',  autoLayout);
+  wire('btn-auto-layout2', autoLayout);
+  wire('btn-align-arrows', alignArrowsOnly);
+  wire('btn-align-arrows2',alignArrowsOnly);
+  wire('btn-finish-sadt',  finishSADT);
+  wire('btn-finish-sadt2', finishSADT);
+  wire('btn-validate',     validateSADT);
+  wire('btn-new-diagram',  newDiagram);
+  wire('btn-save',         saveJSON);
+  wire('btn-load',         ()=>document.getElementById('file-input').click());
+  wire('btn-export-png',   exportPNG);
+  wire('btn-open-actigramme',()=>{
+    if(selectedType==='rect'){const r=rects.find(r=>r.id===selectedId);openActigramme(r);}
+  });
+  wire('btn-toggle-grid',()=>{
+    showGrid=!showGrid;
+    const btn=document.getElementById('btn-toggle-grid');
+    if(btn)btn.classList.toggle('r-toggled',showGrid);
+    render();
+  });
+  wire('btn-toggle-snap',()=>{
+    snapToGrid=!snapToGrid;
+    const btn=document.getElementById('btn-toggle-snap');
+    if(btn)btn.classList.toggle('r-toggled',snapToGrid);
+    showStatusMsg(snapToGrid?'🔲 Magnétisation activée':'🔲 Magnétisation désactivée');
+  });
+  wire('btn-about',()=>alert(
+    'SADT Editor Pro\n\nÉditeur de diagrammes SADT professionnel.\n\n'+
+    'Fonctionnalités\u00A0:\n'+
+    '• Fonctions, sous-fonctions, connexions SADT\n'+
+    '• Onglets multiples (Top-Level + Actigrammes)\n'+
+    '• Explorateur avec glisser-déposer\n'+
+    '• Annuler/Refaire (Ctrl+Z/Y)\n'+
+    '• Copier/Coller (Ctrl+C/V)\n'+
+    '• Grille et magnétisation\n'+
+    '• Validation SADT\n'+
+    '• Sauvegarde JSON et export PNG\n\n'+
+    'Vanilla JavaScript — Canvas 2D API'
+  ));
+
+  const fi=document.getElementById('file-input');
+  if(fi)fi.addEventListener('change',e=>{if(e.target.files[0]){loadJSON(e.target.files[0]);e.target.value='';}});
+}
+
+// ─── Tab bar wiring ──────────────────────────────────────────
+
+function setupTabBar() {
+  const btn=document.getElementById('btn-new-tab');
+  if(btn)btn.addEventListener('click',()=>addNewTab('Actigramme '+tabs.length,'actigramme'));
+}
+
+// ─── Nav bar wiring ──────────────────────────────────────────
+
+function setupNavBar() {
+  const wire=(id,fn)=>{const el=document.getElementById(id);if(el)el.addEventListener('click',fn);};
+  wire('nav-home',()=>{
+    const tl=tabs.find(t=>t.type==='top-level')||tabs[0];
+    switchToTab(tl.id);
+  });
+  wire('nav-prev',()=>{
+    const idx=tabs.findIndex(t=>t.id===currentTabId);
+    if(idx>0)switchToTab(tabs[idx-1].id);
+  });
+  wire('nav-next',()=>{
+    const idx=tabs.findIndex(t=>t.id===currentTabId);
+    if(idx<tabs.length-1)switchToTab(tabs[idx+1].id);
+  });
+  wire('nav-up',()=>{
+    const tab=currentTab();
+    if(!tab.parentRectId) return;
+    const parentTab=tabs.find(t=>t.rects&&t.rects.some(r=>r.id===tab.parentRectId));
+    switchToTab(parentTab?(parentTab.id):(tabs.find(t=>t.type==='top-level')||tabs[0]).id);
+  });
+  wire('nav-down',()=>{
+    if(selectedType==='rect'){const r=rects.find(r=>r.id===selectedId);openActigramme(r);}
+    else showStatusMsg('Sélectionnez une fonction, puis ↓ pour ouvrir son actigramme.');
   });
 }
 
@@ -1769,10 +1446,15 @@ function setupToolbar() {
 
 function init() {
   resizeCanvas();
-  setupToolbar();
+  setupRibbon();
+  setupTabBar();
+  setupNavBar();
+  setupExplorer();
+  setupExplorerResizer();
+  renderTabBar();
   setMode('select');
-
-  // Re-size when container changes
+  updateNavBar();
+  updateUndoRedoBtns();
   new ResizeObserver(resizeCanvas).observe(container);
 }
 
