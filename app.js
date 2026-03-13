@@ -86,6 +86,13 @@ let arrowDraw = null;
 // Waypoint dragging
 let waypointDrag = null;   // { arrowId, wpIdx }
 
+// Segment drag – pending waypoint creation on first mouse move (arrow malleability)
+let segmentDragInfo = null;  // { arrowId, segIdx }
+
+// Rubber-band (rectangle) selection
+let selectionBox = null;         // { startX, startY, curX, curY }
+let multiSelectedArrowIds = [];  // arrow IDs selected by rubber-band
+
 // Detect click vs drag
 let mdX = 0, mdY = 0, moved = false;
 
