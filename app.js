@@ -34,7 +34,7 @@ const TYPE_LABELS = {
 };
 
 const MODE_HINTS = {
-  select:         'Cliquez pour sélectionner · Glissez pour déplacer · Double-clic rect = renommer · Double-clic flèche = nom/virage · Clic droit sur virage = supprimer',
+  select:         'Cliquez pour sélectionner · Glissez pour déplacer · Bouton « Nommer » ou (N) pour nommer · Double-clic rect = renommer · Double-clic flèche = nom/virage · Clic droit sur virage = supprimer',
   'add-rect':     'Cliquez sur le canvas pour placer un rectangle.',
   'add-arrow':    'Cliquez sur un bord de rectangle (ou n\'importe où) pour démarrer la flèche, puis cliquez pour terminer. Échap pour annuler.',
   'add-free-arrow': 'Cliquez pour démarrer la flèche libre, puis cliquez pour terminer. Échap pour annuler.',
@@ -561,7 +561,13 @@ function updateCursor(mx, my) {
 // ─── Status bar ──────────────────────────────────────────────
 
 function updateStatus() {
-  if (!selectedId) { statusSel.textContent = ''; return; }
+  const btnRename = document.getElementById('btn-rename');
+  if (!selectedId) {
+    statusSel.textContent = '';
+    if (btnRename) btnRename.disabled = true;
+    return;
+  }
+  if (btnRename) btnRename.disabled = false;
   if (selectedType === 'rect') {
     const r = rects.find(r => r.id === selectedId);
     statusSel.textContent = r ? `Rectangle : « ${r.label} »` : '';
@@ -901,6 +907,12 @@ function startEditArrow(id) {
   labelInput.select();
 }
 
+function renameSelected() {
+  if (!selectedId) return;
+  if (selectedType === 'rect') startEditRect(selectedId);
+  else if (selectedType === 'arrow') startEditArrow(selectedId);
+}
+
 function positionEditor(x, y, w, h) {
   labelEditor.style.left   = x + 'px';
   labelEditor.style.top    = y + 'px';
@@ -1223,6 +1235,7 @@ document.addEventListener('keydown', e => {
     case 'r': case 'R': setMode('add-rect'); break;
     case 'a': case 'A': setMode('add-arrow'); break;
     case 'f': case 'F': setMode('add-free-arrow'); break;
+    case 'n': case 'N': renameSelected(); break;
     case 'v': case 'V': fitToView(); break;
   }
 });
@@ -1234,6 +1247,7 @@ function setupToolbar() {
   document.getElementById('btn-add-rect').addEventListener('click',        () => setMode('add-rect'));
   document.getElementById('btn-add-arrow').addEventListener('click',       () => setMode('add-arrow'));
   document.getElementById('btn-add-free-arrow').addEventListener('click',  () => setMode('add-free-arrow'));
+  document.getElementById('btn-rename').addEventListener('click',          renameSelected);
   document.getElementById('btn-delete').addEventListener('click',          deleteSelected);
   document.getElementById('btn-fit-view').addEventListener('click',        fitToView);
   document.getElementById('btn-save').addEventListener('click',            saveJSON);

@@ -17,7 +17,7 @@
 |--------|--------------|
 | Ajouter un rectangle | Cliquez sur **Rectangle** dans la barre d'outils, puis cliquez sur le canvas |
 | Déplacer un rectangle | Mode **Sélection** → glissez le rectangle |
-| Renommer | Double-cliquez sur le rectangle, saisissez le nouveau nom, appuyez sur **Entrée** |
+| Renommer | Sélectionnez le rectangle → cliquez **✏️ Nommer** (ou `N`), ou double-cliquez dessus |
 | Redimensionner | Sélectionnez le rectangle → faites glisser l'un des 4 coins bleus |
 | Supprimer | Sélectionnez → cliquez **Supprimer** ou appuyez sur la touche **Suppr** |
 
@@ -69,6 +69,7 @@ Il est possible de **placer des rectangles à l'intérieur d'autres rectangles**
 - **Clic droit sur un point de virage** pour le supprimer également.
 
 #### Étiquettes des flèches
+- **Cliquez sur la flèche** pour la sélectionner, puis cliquez sur le bouton **✏️ Nommer** dans la barre d'outils (ou appuyez sur `N`).
 - Double-cliquez sur la flèche, saisissez l'étiquette, appuyez sur **Entrée**.
 - L'étiquette s'affiche **à côté de la flèche** (décalée perpendiculairement à sa direction) dans un encadré coloré.
 - Si la flèche n'a pas d'étiquette, rien n'est affiché.
@@ -94,6 +95,7 @@ Il est possible de **placer des rectangles à l'intérieur d'autres rectangles**
 | `R` | Mode Ajouter un rectangle |
 | `A` | Mode Flèche connexion |
 | `F` | Mode Flèche libre |
+| `N` | Nommer / renommer l'élément sélectionné |
 | `V` | Ajuster la vue au contenu |
 | `Suppr` / `Backspace` | Supprimer l'élément sélectionné |
 | `Échap` | Annuler / Revenir en mode Sélection |
