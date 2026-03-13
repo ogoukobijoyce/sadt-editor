@@ -3,133 +3,401 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SADT Editor — Éditeur de diagrammes SADT</title>
+  <title>SADT Editor Pro — Éditeur de diagrammes SADT</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div id="app">
+<div id="app">
 
-    <!-- ── Barre d'outils ── -->
-    <header id="toolbar">
-      <div class="tb-section tb-brand">
-        <span class="brand-title">SADT Editor</span>
+  <!-- ══ RUBAN (RIBBON) ══ -->
+  <div id="ribbon">
+    <div id="ribbon-header">
+      <div id="brand">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+          <rect x="2" y="6" width="20" height="13" rx="2" stroke="#7dd3fc" stroke-width="2"/>
+          <line x1="2" y1="11" x2="22" y2="11" stroke="#7dd3fc" stroke-width="1.5"/>
+          <path d="M7 17 L12 9 L17 17" stroke="#7dd3fc" stroke-width="1.5" fill="none"/>
+        </svg>
+        <span>SADT Editor Pro</span>
+      </div>
+      <nav id="ribbon-tabs">
+        <button class="r-tab active" data-panel="home">Accueil</button>
+        <button class="r-tab" data-panel="file">Fichier</button>
+        <button class="r-tab" data-panel="design">Conception</button>
+        <button class="r-tab" data-panel="view">Vue</button>
+        <button class="r-tab" data-panel="help">Aide</button>
+      </nav>
+    </div>
+
+    <div id="ribbon-body">
+
+      <!-- ── Accueil ── -->
+      <div class="r-panel active" id="r-panel-home">
+
+        <div class="r-group">
+          <div class="r-group-content">
+            <button id="btn-select" class="r-btn r-large active" data-mode="select" title="Sélectionner (S)">
+              <svg viewBox="0 0 24 24" fill="currentColor" width="22" height="22"><path d="M5 3 L5 19 L9.5 15 L12 21 L14.5 20 L12 14 L17 14 Z"/></svg>
+              <span>Sélection</span>
+            </button>
+          </div>
+          <div class="r-group-label">Outil</div>
+        </div>
+        <div class="r-sep"></div>
+
+        <div class="r-group">
+          <div class="r-group-content">
+            <button id="btn-add-rect" class="r-btn r-large" data-mode="add-rect" title="Ajouter une fonction (R)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><rect x="3" y="7" width="18" height="10" rx="2"/></svg>
+              <span>Fonction</span>
+            </button>
+            <button id="btn-add-sub-rect" class="r-btn r-large" title="Sous-fonction (dans la fonction sélectionnée)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><rect x="2" y="4" width="20" height="16" rx="2"/><rect x="6" y="9" width="12" height="7" rx="1.5"/></svg>
+              <span>Sous-fn.</span>
+            </button>
+          </div>
+          <div class="r-group-label">Éléments</div>
+        </div>
+        <div class="r-sep"></div>
+
+        <div class="r-group">
+          <div class="r-group-content">
+            <button id="btn-add-arrow" class="r-btn r-large" data-mode="add-arrow" title="Connexion entre fonctions (A)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><line x1="4" y1="12" x2="17" y2="12"/><polyline points="13,7 18,12 13,17"/></svg>
+              <span>Connexion</span>
+            </button>
+            <div class="r-btn-col">
+              <button id="btn-add-free-arrow" class="r-btn r-large" data-mode="add-free-arrow" title="Flèche SADT libre (F)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><line x1="4" y1="20" x2="18" y2="6"/><polyline points="11,5 18,5 18,12"/></svg>
+                <span>Flèche lib.</span>
+              </button>
+              <select id="arrow-type-select" title="Type de flèche libre">
+                <option value="input">🔵 Entrée</option>
+                <option value="output">🟢 Sortie</option>
+                <option value="control">🔴 Contrôle</option>
+                <option value="mechanism">🟠 Mécanisme</option>
+              </select>
+            </div>
+          </div>
+          <div class="r-group-label">Flux SADT</div>
+        </div>
+        <div class="r-sep"></div>
+
+        <div class="r-group">
+          <div class="r-group-content r-group-col">
+            <button id="btn-rename" class="r-btn r-small" title="Renommer l'élément sélectionné (N)" disabled>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+              Renommer
+            </button>
+            <button id="btn-delete" class="r-btn r-small r-danger" title="Supprimer l'élément sélectionné (Suppr)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M9 6V4h6v2"/></svg>
+              Supprimer
+            </button>
+            <button id="btn-open-actigramme" class="r-btn r-small r-success" title="Ouvrir l'actigramme de la fonction sélectionnée" disabled>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+              Actigramme
+            </button>
+          </div>
+          <div class="r-group-label">Sélection</div>
+        </div>
+        <div class="r-sep"></div>
+
+        <div class="r-group">
+          <div class="r-group-content r-group-col">
+            <button id="btn-undo" class="r-btn r-small" title="Annuler (Ctrl+Z)" disabled>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4"/></svg>
+              Annuler
+            </button>
+            <button id="btn-redo" class="r-btn r-small" title="Refaire (Ctrl+Y)" disabled>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-.49-4"/></svg>
+              Refaire
+            </button>
+            <button id="btn-copy" class="r-btn r-small" title="Copier (Ctrl+C)" disabled>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              Copier
+            </button>
+            <button id="btn-paste" class="r-btn r-small" title="Coller (Ctrl+V)" disabled>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>
+              Coller
+            </button>
+          </div>
+          <div class="r-group-label">Édition</div>
+        </div>
+        <div class="r-sep"></div>
+
+        <div class="r-group">
+          <div class="r-group-content r-group-col">
+            <button id="btn-fit-view" class="r-btn r-small" title="Ajuster la vue au contenu (V)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+              Ajuster vue
+            </button>
+            <button id="btn-auto-layout" class="r-btn r-small" title="Aligner automatiquement (L)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><line x1="21" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="21" y1="18" x2="3" y2="18"/></svg>
+              Auto-aligner
+            </button>
+            <button id="btn-align-arrows" class="r-btn r-small" title="Aligner flèches orthogonalement (Q)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+              Aligner flèches
+            </button>
+            <button id="btn-finish-sadt" class="r-btn r-small r-success" title="Terminer et aligner le SADT">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="20 6 9 17 4 12"/></svg>
+              Terminer SADT
+            </button>
+          </div>
+          <div class="r-group-label">Disposition</div>
+        </div>
+
       </div>
 
-      <div class="tb-section tb-tools">
-        <!-- Sélection -->
-        <button id="btn-select" class="tool-btn active" title="Sélectionner (S)">
-          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M5 3 L5 19 L9.5 15 L12 21 L14.5 20 L12 14 L17 14 Z"/></svg>
-          Sélection
-        </button>
+      <!-- ── Fichier ── -->
+      <div class="r-panel" id="r-panel-file">
 
-        <!-- Rectangle -->
-        <button id="btn-add-rect" class="tool-btn" title="Ajouter un rectangle (R)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="7" width="18" height="10" rx="2"/></svg>
-          Rectangle
-        </button>
+        <div class="r-group">
+          <div class="r-group-content">
+            <button id="btn-new-diagram" class="r-btn r-large" title="Nouveau diagramme">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+              <span>Nouveau</span>
+            </button>
+          </div>
+          <div class="r-group-label">Créer</div>
+        </div>
+        <div class="r-sep"></div>
 
-        <!-- Sous-rectangle -->
-        <button id="btn-add-sub-rect" class="tool-btn" title="Ajouter un sous-rectangle dans le rectangle sélectionné">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><rect x="6" y="9" width="12" height="7" rx="1.5"/></svg>
-          Sous-rect
-        </button>
+        <div class="r-group">
+          <div class="r-group-content">
+            <button id="btn-save" class="r-btn r-large" title="Sauvegarder en JSON (Ctrl+S)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+              <span>Sauvegarder</span>
+            </button>
+            <button id="btn-load" class="r-btn r-large" title="Charger un diagramme JSON (Ctrl+O)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              <span>Ouvrir</span>
+            </button>
+            <button id="btn-export-png" class="r-btn r-large" title="Exporter en image PNG">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+              <span>Export PNG</span>
+            </button>
+          </div>
+          <div class="r-group-label">Fichier</div>
+        </div>
 
-        <!-- Flèche connexion -->
-        <button id="btn-add-arrow" class="tool-btn" title="Flèche de connexion entre rectangles (A)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="12" x2="17" y2="12"/><polyline points="13,7 18,12 13,17"/></svg>
-          Flèche
-        </button>
+      </div>
 
-        <!-- Flèche libre + sélecteur de type -->
-        <div class="free-arrow-wrap">
-          <button id="btn-add-free-arrow" class="tool-btn" title="Flèche libre (Entrée/Sortie/Contrôle/Mécanisme) (F)">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="20" x2="18" y2="6"/><polyline points="11,5 18,5 18,12"/></svg>
-            Flèche libre
-          </button>
-          <select id="arrow-type-select" title="Type de flèche libre">
-            <option value="input">🔵 Entrée</option>
-            <option value="output">🟢 Sortie</option>
-            <option value="control">🔴 Contrôle</option>
-            <option value="mechanism">🟠 Mécanisme</option>
-          </select>
+      <!-- ── Conception ── -->
+      <div class="r-panel" id="r-panel-design">
+
+        <div class="r-group">
+          <div class="r-group-content">
+            <button id="btn-validate" class="r-btn r-large" title="Valider la cohérence du diagramme SADT">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+              <span>Valider SADT</span>
+            </button>
+          </div>
+          <div class="r-group-label">Vérification</div>
+        </div>
+        <div class="r-sep"></div>
+
+        <div class="r-group">
+          <div class="r-group-content r-group-col">
+            <button id="btn-auto-layout2" class="r-btn r-small" title="Aligner automatiquement (L)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><line x1="21" y1="10" x2="3" y2="10"/><line x1="21" y1="6" x2="3" y2="6"/><line x1="21" y1="14" x2="3" y2="14"/><line x1="21" y1="18" x2="3" y2="18"/></svg>
+              Auto-aligner
+            </button>
+            <button id="btn-align-arrows2" class="r-btn r-small" title="Aligner flèches orthogonalement (Q)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+              Aligner flèches
+            </button>
+            <button id="btn-finish-sadt2" class="r-btn r-small r-success" title="Terminer et aligner le SADT">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="20 6 9 17 4 12"/></svg>
+              Terminer SADT
+            </button>
+          </div>
+          <div class="r-group-label">Disposition</div>
+        </div>
+
+      </div>
+
+      <!-- ── Vue ── -->
+      <div class="r-panel" id="r-panel-view">
+
+        <div class="r-group">
+          <div class="r-group-content">
+            <button id="btn-toggle-grid" class="r-btn r-large r-toggled" title="Afficher/masquer la grille">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="22" height="22">
+                <line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/>
+                <line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/>
+              </svg>
+              <span>Grille</span>
+            </button>
+            <button id="btn-toggle-snap" class="r-btn r-large r-toggled" title="Activer/désactiver la magnétisation sur la grille">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22">
+                <circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8" stroke-dasharray="4 2"/>
+              </svg>
+              <span>Magnétiser</span>
+            </button>
+          </div>
+          <div class="r-group-label">Affichage</div>
+        </div>
+        <div class="r-sep"></div>
+
+        <div class="r-group">
+          <div class="r-group-content">
+            <button id="btn-fit-view2" class="r-btn r-large" title="Ajuster la vue au contenu (V)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+              <span>Ajuster vue</span>
+            </button>
+          </div>
+          <div class="r-group-label">Zoom</div>
+        </div>
+
+      </div>
+
+      <!-- ── Aide ── -->
+      <div class="r-panel" id="r-panel-help">
+
+        <div class="r-group">
+          <div class="r-group-content">
+            <button id="btn-about" class="r-btn r-large" title="À propos de SADT Editor Pro">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              <span>À propos</span>
+            </button>
+          </div>
+          <div class="r-group-label">Information</div>
+        </div>
+        <div class="r-sep"></div>
+
+        <div class="r-group">
+          <div class="r-group-content r-group-col">
+            <div class="r-help-text">
+              <strong>Raccourcis clavier</strong><br>
+              S = Sélection · R = Rectangle · A = Flèche · F = Flèche libre<br>
+              N = Renommer · V = Ajuster vue · L = Auto-aligner · Q = Aligner flèches<br>
+              Ctrl+Z = Annuler · Ctrl+Y = Refaire · Ctrl+C = Copier · Ctrl+V = Coller<br>
+              Ctrl+S = Sauvegarder · Ctrl+O = Ouvrir · Suppr = Supprimer<br>
+              Ctrl+DblClic rect = Ouvrir actigramme
+            </div>
+          </div>
+          <div class="r-group-label">Raccourcis</div>
+        </div>
+
+      </div>
+
+    </div><!-- #ribbon-body -->
+  </div><!-- #ribbon -->
+
+  <!-- ══ CONTENU PRINCIPAL ══ -->
+  <div id="main">
+
+    <!-- ── Panneau Explorateur ── -->
+    <aside id="explorer">
+      <div id="explorer-header">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        Explorateur
+      </div>
+      <div id="explorer-tree">
+        <div class="tree-root-item" id="tree-root" data-expanded="true">
+          <span class="tree-caret" id="tree-root-caret">▾</span>
+          <span class="tree-icon">🗂</span>
+          <span class="tree-label">All Types</span>
+        </div>
+        <div class="tree-children" id="tree-root-children">
+          <div class="tree-leaf" draggable="true" data-create-type="pointer">
+            <span class="tree-icon">↖</span>
+            <span class="tree-label">Pointer Tool</span>
+          </div>
+          <div class="tree-leaf" draggable="true" data-create-type="control">
+            <span class="tree-icon" style="color:#F44336">■</span>
+            <span class="tree-label">Contrôle</span>
+          </div>
+          <div class="tree-leaf" draggable="true" data-create-type="input">
+            <span class="tree-icon" style="color:#2196F3">■</span>
+            <span class="tree-label">Flux</span>
+          </div>
+          <div class="tree-leaf" draggable="true" data-create-type="rect">
+            <span class="tree-icon">□</span>
+            <span class="tree-label">Fonction</span>
+          </div>
+          <div class="tree-leaf" draggable="true" data-create-type="graph">
+            <span class="tree-icon">📊</span>
+            <span class="tree-label">Graphe</span>
+          </div>
+          <div class="tree-leaf" draggable="true" data-create-type="mechanism">
+            <span class="tree-icon" style="color:#FF9800">■</span>
+            <span class="tree-label">Mécanisme</span>
+          </div>
+          <div class="tree-leaf" draggable="true" data-create-type="mecs">
+            <span class="tree-icon">⊕</span>
+            <span class="tree-label">MECS</span>
+          </div>
+          <div class="tree-leaf" draggable="true" data-create-type="output">
+            <span class="tree-icon" style="color:#4CAF50">■</span>
+            <span class="tree-label">Note</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Poignée de redimensionnement -->
+    <div id="explorer-resizer"></div>
+
+    <!-- ── Zone canvas (onglets + canvas) ── -->
+    <div id="canvas-area">
+
+      <!-- Barre d'onglets -->
+      <div id="tab-bar">
+        <!-- Les onglets sont générés dynamiquement -->
+        <button id="btn-new-tab" title="Nouvel onglet">+</button>
+      </div>
+
+      <!-- Conteneur canvas -->
+      <div id="canvas-container">
+        <canvas id="canvas"></canvas>
+
+        <!-- Éditeur de texte superposé -->
+        <div id="label-editor">
+          <input type="text" id="label-input" placeholder="Nom..." autocomplete="off" spellcheck="false">
+        </div>
+
+        <!-- Légende des couleurs -->
+        <div id="legend">
+          <div class="legend-item"><span class="dot input"></span>Entrée</div>
+          <div class="legend-item"><span class="dot output"></span>Sortie</div>
+          <div class="legend-item"><span class="dot control"></span>Contrôle</div>
+          <div class="legend-item"><span class="dot mechanism"></span>Mécanisme</div>
         </div>
       </div>
 
-      <div class="tb-section tb-actions">
-        <button id="btn-rename" class="tool-btn" title="Nommer / renommer l'élément sélectionné (N)" disabled>
-          ✏️ Nommer
-        </button>
+    </div><!-- #canvas-area -->
 
-        <div class="tb-sep"></div>
+  </div><!-- #main -->
 
-        <button id="btn-delete" class="tool-btn danger" title="Supprimer l'élément sélectionné (Suppr)">
-          🗑 Supprimer
-        </button>
-
-        <div class="tb-sep"></div>
-
-        <button id="btn-fit-view" class="tool-btn" title="Ajuster la vue au contenu (V)">
-          🔍 Ajuster vue
-        </button>
-
-        <div class="tb-sep"></div>
-
-        <button id="btn-auto-layout" class="tool-btn" title="Aligner automatiquement rectangles et flèches (L)">
-          ⚙️ Auto-aligner
-        </button>
-
-        <button id="btn-align-arrows" class="tool-btn" title="Aligner les flèches en angles droits sans déplacer les rectangles (Q)">
-          ↗ Aligner flèches
-        </button>
-
-        <div class="tb-sep"></div>
-
-        <button id="btn-save" class="tool-btn" title="Sauvegarder le diagramme en JSON (Ctrl+S)">
-          💾 Sauvegarder
-        </button>
-        <button id="btn-load" class="tool-btn" title="Charger un diagramme JSON (Ctrl+O)">
-          📂 Charger
-        </button>
-        <input type="file" id="file-input" accept=".json" style="display:none" aria-label="Sélectionner un fichier JSON à charger">
-        <button id="btn-export-png" class="tool-btn" title="Exporter en image PNG">
-          🖼 PNG
-        </button>
-
-        <div class="tb-sep"></div>
-
-        <button id="btn-finish-sadt" class="tool-btn primary" title="Terminer le SADT et aligner le diagramme automatiquement">
-          ✅ Terminer le SADT
-        </button>
-      </div>
-    </header>
-
-    <!-- ── Canvas ── -->
-    <div id="canvas-container">
-      <canvas id="canvas"></canvas>
-
-      <!-- Éditeur de texte superposé -->
-      <div id="label-editor">
-        <input type="text" id="label-input" placeholder="Nom..." autocomplete="off" spellcheck="false">
-      </div>
-
-      <!-- Légende des couleurs -->
-      <div id="legend">
-        <div class="legend-item"><span class="dot input"></span>Entrée</div>
-        <div class="legend-item"><span class="dot output"></span>Sortie</div>
-        <div class="legend-item"><span class="dot control"></span>Contrôle</div>
-        <div class="legend-item"><span class="dot mechanism"></span>Mécanisme</div>
-      </div>
+  <!-- ══ BARRE DE NAVIGATION ══ -->
+  <footer id="nav-bar">
+    <div class="nav-section nav-level-section">
+      <span id="nav-level-badge">Top-Level</span>
     </div>
-
-    <!-- ── Barre de statut ── -->
-    <footer id="status-bar">
+    <div class="nav-section nav-btns-section">
+      <button class="nav-btn" id="nav-home" title="Retour au Top-Level">⌂</button>
+      <button class="nav-btn" id="nav-prev" title="Onglet précédent">◀</button>
+      <button class="nav-btn" id="nav-next" title="Onglet suivant">▶</button>
+      <button class="nav-btn" id="nav-up" title="Remonter d'un niveau">↑</button>
+      <button class="nav-btn" id="nav-down" title="Ouvrir l'actigramme">↓</button>
+    </div>
+    <div class="nav-section nav-status-section">
       <span id="status-mode">Mode : Sélection</span>
-      <span id="status-hint">Cliquez pour sélectionner · Glissez pour déplacer · Bouton « Nommer » ou (N) pour nommer · Double-clic rect = renommer · Double-clic flèche = nom/virage · Clic droit sur virage = supprimer · (L) = auto-aligner · (Q) = aligner flèches · Ctrl+S = sauvegarder · Ctrl+O = ouvrir</span>
+      <span id="status-hint"></span>
+    </div>
+    <div class="nav-section nav-right-section">
       <span id="status-sel"></span>
-    </footer>
+      <span id="nav-coords">x 0, y 0</span>
+    </div>
+  </footer>
 
-  </div>
+  <!-- Input fichier caché -->
+  <input type="file" id="file-input" accept=".json" style="display:none" aria-label="Sélectionner un fichier JSON à charger">
 
-  <script src="app.js"></script>
+</div><!-- #app -->
+
+<script src="app.js"></script>
 </body>
 </html>
