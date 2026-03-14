@@ -289,8 +289,8 @@
               Ctrl+Z = Annuler · Ctrl+Y = Refaire · Ctrl+C = Copier · Ctrl+V = Coller<br>
               Ctrl+S = Sauvegarder · Ctrl+O = Ouvrir · Suppr = Supprimer<br>
               Ctrl+DblClic rect = Ouvrir actigramme<br>
-              Molette = Zoom · Ctrl++ / Ctrl+- = Zoom · Ctrl+0 = Réinitialiser zoom<br>
-              Bouton central souris = Panoramique
+              Molette = Zoom · Ctrl++ / Ctrl+- = Zoom · Ctrl+0 = Réinitialiser zoom · Barre de zoom (bas droite)<br>
+              Bouton central souris = Panoramique · Barre horizontale (bas) = Panoramique gauche/droite
             </div>
           </div>
           <div class="r-group-label">Raccourcis</div>
@@ -383,6 +383,13 @@
         </div>
       </div>
 
+      <!-- Barre de panoramique horizontal -->
+      <div id="h-pan-bar">
+        <span class="pan-label" title="Déplacer vers la gauche">◀</span>
+        <input type="range" id="h-pan-slider" min="-4000" max="4000" step="10" value="0" title="Panoramique horizontal — glisser pour déplacer la vue">
+        <span class="pan-label" title="Déplacer vers la droite">▶</span>
+      </div>
+
     </div><!-- #canvas-area -->
 
   </div><!-- #main -->
@@ -405,7 +412,12 @@
     </div>
     <div class="nav-section nav-right-section">
       <span id="status-sel"></span>
-      <span id="nav-zoom" title="Niveau de zoom">100%</span>
+      <div id="zoom-bar">
+        <button id="zoom-bar-out" class="zoom-bar-btn" title="Zoom arrière (Ctrl+-)">−</button>
+        <input type="range" id="zoom-slider" min="10" max="500" step="1" value="100" title="Niveau de zoom">
+        <button id="zoom-bar-in" class="zoom-bar-btn" title="Zoom avant (Ctrl++)">+</button>
+        <span id="nav-zoom" title="Réinitialiser le zoom (Ctrl+0)">100%</span>
+      </div>
       <span id="nav-coords">x 0, y 0</span>
     </div>
   </footer>
