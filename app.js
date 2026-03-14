@@ -24,6 +24,10 @@ const STATUS_MSG_DELAY  = 4000;
 const COORD_EPSILON     = 1;
 const MAX_OBSTACLE_ITER = 10;
 
+const ZOOM_MIN    = 0.1;
+const ZOOM_MAX    = 5.0;
+const ZOOM_FACTOR = 1.15;
+
 const ARROW_COLORS = {
   input:     '#2196F3',
   output:    '#4CAF50',
@@ -126,6 +130,18 @@ let editType = null;
 
 // Clipboard
 let clipboard = null;
+
+// ─── Viewport (zoom / pan) ───────────────────────────────────
+let viewScale   = 1.0;
+let viewOffsetX = 0;
+let viewOffsetY = 0;
+
+// Middle-mouse panning
+let isPanning  = false;
+let panStartX  = 0;
+let panStartY  = 0;
+let panStartOX = 0;
+let panStartOY = 0;
 
 // ─── Tab management ──────────────────────────────────────────
 
@@ -476,12 +492,19 @@ function drawGrid() {
   if (!showGrid) return;
   ctx.save();
   ctx.strokeStyle = '#d8e0e8';
-  ctx.lineWidth   = 0.5;
-  for (let x = 0; x <= canvasEl.width; x += GRID_STEP) {
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvasEl.height); ctx.stroke();
+  ctx.lineWidth   = 0.5 / viewScale;
+  // Compute the visible world area
+  const worldLeft   = -viewOffsetX / viewScale;
+  const worldTop    = -viewOffsetY / viewScale;
+  const worldRight  = (canvasEl.width  - viewOffsetX) / viewScale;
+  const worldBottom = (canvasEl.height - viewOffsetY) / viewScale;
+  const startX = Math.floor(worldLeft  / GRID_STEP) * GRID_STEP;
+  const startY = Math.floor(worldTop   / GRID_STEP) * GRID_STEP;
+  for (let x = startX; x <= worldRight;  x += GRID_STEP) {
+    ctx.beginPath(); ctx.moveTo(x, worldTop); ctx.lineTo(x, worldBottom); ctx.stroke();
   }
-  for (let y = 0; y <= canvasEl.height; y += GRID_STEP) {
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvasEl.width, y); ctx.stroke();
+  for (let y = startY; y <= worldBottom; y += GRID_STEP) {
+    ctx.beginPath(); ctx.moveTo(worldLeft, y); ctx.lineTo(worldRight, y); ctx.stroke();
   }
   ctx.restore();
 }
@@ -613,6 +636,10 @@ function render() {
   ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
   ctx.fillStyle = '#f0f4f8';
   ctx.fillRect(0, 0, canvasEl.width, canvasEl.height);
+
+  ctx.save();
+  ctx.setTransform(viewScale, 0, 0, viewScale, viewOffsetX, viewOffsetY);
+
   drawGrid();
 
   getRenderOrder().forEach(r => drawRect(r, selectedType === 'rect' && r.id === selectedId));
@@ -635,6 +662,8 @@ function render() {
     }
     ctx.restore();
   }
+
+  ctx.restore();
 }
 
 // ─── Canvas sizing ───────────────────────────────────────────
@@ -761,6 +790,8 @@ function deleteSelected() {
 
 function fitToView() {
   if (rects.length === 0 && arrows.length === 0) return;
+  // Reset viewport so coordinates are normalised in screen space
+  viewScale = 1; viewOffsetX = 0; viewOffsetY = 0;
   const PAD = 60;
   let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
   rects.forEach(r => { minX=Math.min(minX,r.x); minY=Math.min(minY,r.y); maxX=Math.max(maxX,r.x+r.width); maxY=Math.max(maxY,r.y+r.height); });
@@ -776,7 +807,32 @@ function fitToView() {
     a.endX=Math.round(a.endX*scale+tx);     a.endY=Math.round(a.endY*scale+ty);
     if (a.waypoints) a.waypoints = a.waypoints.map(wp => ({ x:Math.round(wp.x*scale+tx), y:Math.round(wp.y*scale+ty) }));
   });
-  selectedId=null; selectedType=null; render(); updateStatus();
+  selectedId=null; selectedType=null; updateZoomDisplay(); render(); updateStatus();
+}
+
+// ─── Zoom helpers ─────────────────────────────────────────────
+
+function updateZoomDisplay() {
+  const el = document.getElementById('nav-zoom');
+  if (el) el.textContent = Math.round(viewScale * 100) + '%';
+}
+
+function zoomAt(screenX, screenY, factor) {
+  const newScale = Math.min(Math.max(viewScale * factor, ZOOM_MIN), ZOOM_MAX);
+  if (newScale === viewScale) return;
+  viewOffsetX = screenX - (screenX - viewOffsetX) * (newScale / viewScale);
+  viewOffsetY = screenY - (screenY - viewOffsetY) * (newScale / viewScale);
+  viewScale   = newScale;
+  updateZoomDisplay();
+  render();
+}
+
+function resetZoom() {
+  viewScale   = 1.0;
+  viewOffsetX = 0;
+  viewOffsetY = 0;
+  updateZoomDisplay();
+  render();
 }
 
 // ─── Auto Layout ─────────────────────────────────────────────
@@ -1150,13 +1206,33 @@ function exportPNG() {
 // ─── Mouse helpers ───────────────────────────────────────────
 
 function getPos(e) {
-  const rect=canvasEl.getBoundingClientRect();
-  return {x:e.clientX-rect.left, y:e.clientY-rect.top};
+  const rect = canvasEl.getBoundingClientRect();
+  return {
+    x: (e.clientX - rect.left  - viewOffsetX) / viewScale,
+    y: (e.clientY - rect.top   - viewOffsetY) / viewScale,
+  };
 }
 
 // ─── Mouse events ────────────────────────────────────────────
 
+canvasEl.addEventListener('wheel', e => {
+  e.preventDefault();
+  const cr  = canvasEl.getBoundingClientRect();
+  const sx  = e.clientX - cr.left;
+  const sy  = e.clientY - cr.top;
+  const factor = e.deltaY < 0 ? ZOOM_FACTOR : 1 / ZOOM_FACTOR;
+  zoomAt(sx, sy, factor);
+}, { passive: false });
+
 canvasEl.addEventListener('mousedown', e => {
+  // Middle-mouse button: start panning
+  if (e.button === 1) {
+    isPanning  = true;
+    panStartX  = e.clientX; panStartY  = e.clientY;
+    panStartOX = viewOffsetX; panStartOY = viewOffsetY;
+    e.preventDefault();
+    return;
+  }
   if (e.button!==0) return;
   if (editId) finishEditing();
   const {x,y}=getPos(e); mdX=x; mdY=y; moved=false;
@@ -1197,6 +1273,14 @@ canvasEl.addEventListener('mousedown', e => {
 });
 
 canvasEl.addEventListener('mousemove', e => {
+  // Middle-mouse panning
+  if (isPanning) {
+    viewOffsetX = panStartOX + (e.clientX - panStartX);
+    viewOffsetY = panStartOY + (e.clientY - panStartY);
+    render();
+    return;
+  }
+
   const {x,y}=getPos(e);
   if(Math.abs(x-mdX)>3||Math.abs(y-mdY)>3) moved=true;
 
@@ -1218,6 +1302,7 @@ canvasEl.addEventListener('mousemove', e => {
 });
 
 canvasEl.addEventListener('mouseup', e => {
+  if (e.button === 1) { isPanning = false; return; }
   if(e.button!==0) return;
   if(isDragging&&dragInfo&&moved){
     const dragged=rects.find(r=>r.id===dragInfo.id);
@@ -1275,6 +1360,8 @@ canvasEl.addEventListener('contextmenu', e => {
   }
 });
 
+canvasEl.addEventListener('mouseleave', () => { isPanning = false; });
+
 // ─── Label input events ──────────────────────────────────────
 
 labelInput.addEventListener('keydown', e => {
@@ -1295,6 +1382,9 @@ document.addEventListener('keydown', e => {
   if(ctrl&&(e.key==='y'||e.key==='Y')){e.preventDefault();redo();return;}
   if(ctrl&&e.key==='c'){e.preventDefault();copySelected();return;}
   if(ctrl&&e.key==='v'){e.preventDefault();pasteClipboard();return;}
+  if(ctrl&&(e.key==='='||e.key==='+')){e.preventDefault();zoomAt(canvasEl.width/2,canvasEl.height/2,ZOOM_FACTOR);return;}
+  if(ctrl&&e.key==='-'){e.preventDefault();zoomAt(canvasEl.width/2,canvasEl.height/2,1/ZOOM_FACTOR);return;}
+  if(ctrl&&e.key==='0'){e.preventDefault();resetZoom();return;}
   switch(e.key){
     case 'Delete':case 'Backspace':deleteSelected();break;
     case 'Escape':
@@ -1340,7 +1430,8 @@ function setupExplorer() {
     e.preventDefault(); container.classList.remove('drag-over');
     const type=e.dataTransfer.getData('text/plain');
     const cr=canvasEl.getBoundingClientRect();
-    const dropX=e.clientX-cr.left, dropY=e.clientY-cr.top;
+    const dropX=(e.clientX-cr.left-viewOffsetX)/viewScale;
+    const dropY=(e.clientY-cr.top-viewOffsetY)/viewScale;
     if(type==='pointer'){setMode('select');return;}
     saveHistory();
     if(type==='rect'||type==='graph'||type==='mecs'){
@@ -1411,6 +1502,9 @@ function setupRibbon() {
   wire('btn-paste',        pasteClipboard);
   wire('btn-fit-view',     fitToView);
   wire('btn-fit-view2',    fitToView);
+  wire('btn-zoom-in',  ()=>zoomAt(canvasEl.width/2, canvasEl.height/2, ZOOM_FACTOR));
+  wire('btn-zoom-out', ()=>zoomAt(canvasEl.width/2, canvasEl.height/2, 1/ZOOM_FACTOR));
+  wire('btn-zoom-reset', resetZoom);
   wire('btn-auto-layout',  autoLayout);
   wire('btn-auto-layout2', autoLayout);
   wire('btn-align-arrows', alignArrowsOnly);
@@ -1503,6 +1597,7 @@ function init() {
   setMode('select');
   updateNavBar();
   updateUndoRedoBtns();
+  updateZoomDisplay();
   new ResizeObserver(resizeCanvas).observe(container);
 }
 

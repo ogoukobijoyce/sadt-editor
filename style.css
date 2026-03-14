@@ -653,3 +653,12 @@ html, body {
   text-align: right;
 }
 
+#nav-zoom {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-family: 'Courier New', monospace;
+  min-width: 40px;
+  text-align: right;
+  cursor: default;
+}
+
