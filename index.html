@@ -246,6 +246,20 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
               <span>Ajuster vue</span>
             </button>
+            <div class="r-btn-col">
+              <button id="btn-zoom-in" class="r-btn r-small" title="Zoom avant (Ctrl++)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                Zoom +
+              </button>
+              <button id="btn-zoom-out" class="r-btn r-small" title="Zoom arrière (Ctrl+-)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                Zoom −
+              </button>
+              <button id="btn-zoom-reset" class="r-btn r-small" title="Réinitialiser le zoom (Ctrl+0)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                100%
+              </button>
+            </div>
           </div>
           <div class="r-group-label">Zoom</div>
         </div>
@@ -274,7 +288,9 @@
               N = Renommer · V = Ajuster vue · L = Auto-aligner · Q = Aligner flèches<br>
               Ctrl+Z = Annuler · Ctrl+Y = Refaire · Ctrl+C = Copier · Ctrl+V = Coller<br>
               Ctrl+S = Sauvegarder · Ctrl+O = Ouvrir · Suppr = Supprimer<br>
-              Ctrl+DblClic rect = Ouvrir actigramme
+              Ctrl+DblClic rect = Ouvrir actigramme<br>
+              Molette = Zoom · Ctrl++ / Ctrl+- = Zoom · Ctrl+0 = Réinitialiser zoom<br>
+              Bouton central souris = Panoramique
             </div>
           </div>
           <div class="r-group-label">Raccourcis</div>
@@ -389,6 +405,7 @@
     </div>
     <div class="nav-section nav-right-section">
       <span id="status-sel"></span>
+      <span id="nav-zoom" title="Niveau de zoom">100%</span>
       <span id="nav-coords">x 0, y 0</span>
     </div>
   </footer>
