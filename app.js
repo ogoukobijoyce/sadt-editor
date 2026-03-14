@@ -807,14 +807,22 @@ function fitToView() {
     a.endX=Math.round(a.endX*scale+tx);     a.endY=Math.round(a.endY*scale+ty);
     if (a.waypoints) a.waypoints = a.waypoints.map(wp => ({ x:Math.round(wp.x*scale+tx), y:Math.round(wp.y*scale+ty) }));
   });
-  selectedId=null; selectedType=null; updateZoomDisplay(); render(); updateStatus();
+  selectedId=null; selectedType=null; updateZoomDisplay(); updatePanSlider(); render(); updateStatus();
 }
 
 // ─── Zoom helpers ─────────────────────────────────────────────
 
 function updateZoomDisplay() {
+  const pct = Math.round(viewScale * 100);
   const el = document.getElementById('nav-zoom');
-  if (el) el.textContent = Math.round(viewScale * 100) + '%';
+  if (el) el.textContent = pct + '%';
+  const slider = document.getElementById('zoom-slider');
+  if (slider) slider.value = pct;
+}
+
+function updatePanSlider() {
+  const slider = document.getElementById('h-pan-slider');
+  if (slider) slider.value = Math.round(viewOffsetX);
 }
 
 function zoomAt(screenX, screenY, factor) {
@@ -824,6 +832,7 @@ function zoomAt(screenX, screenY, factor) {
   viewOffsetY = screenY - (screenY - viewOffsetY) * (newScale / viewScale);
   viewScale   = newScale;
   updateZoomDisplay();
+  updatePanSlider();
   render();
 }
 
@@ -832,6 +841,7 @@ function resetZoom() {
   viewOffsetX = 0;
   viewOffsetY = 0;
   updateZoomDisplay();
+  updatePanSlider();
   render();
 }
 
@@ -1277,6 +1287,7 @@ canvasEl.addEventListener('mousemove', e => {
   if (isPanning) {
     viewOffsetX = panStartOX + (e.clientX - panStartX);
     viewOffsetY = panStartOY + (e.clientY - panStartY);
+    updatePanSlider();
     render();
     return;
   }
@@ -1505,6 +1516,36 @@ function setupRibbon() {
   wire('btn-zoom-in',  ()=>zoomAt(canvasEl.width/2, canvasEl.height/2, ZOOM_FACTOR));
   wire('btn-zoom-out', ()=>zoomAt(canvasEl.width/2, canvasEl.height/2, 1/ZOOM_FACTOR));
   wire('btn-zoom-reset', resetZoom);
+  wire('zoom-bar-out', ()=>zoomAt(canvasEl.width/2, canvasEl.height/2, 1/ZOOM_FACTOR));
+  wire('zoom-bar-in',  ()=>zoomAt(canvasEl.width/2, canvasEl.height/2, ZOOM_FACTOR));
+  wire('nav-zoom',     resetZoom);
+
+  // Zoom slider
+  const zoomSliderEl = document.getElementById('zoom-slider');
+  if (zoomSliderEl) {
+    zoomSliderEl.addEventListener('input', () => {
+      const newPct   = parseInt(zoomSliderEl.value, 10);
+      const newScale = Math.min(Math.max(newPct / 100, ZOOM_MIN), ZOOM_MAX);
+      if (newScale === viewScale) return;
+      const cx = canvasEl.width  / 2;
+      const cy = canvasEl.height / 2;
+      viewOffsetX = cx - (cx - viewOffsetX) * (newScale / viewScale);
+      viewOffsetY = cy - (cy - viewOffsetY) * (newScale / viewScale);
+      viewScale   = newScale;
+      updateZoomDisplay();
+      updatePanSlider();
+      render();
+    });
+  }
+
+  // Horizontal pan slider
+  const hPanSliderEl = document.getElementById('h-pan-slider');
+  if (hPanSliderEl) {
+    hPanSliderEl.addEventListener('input', () => {
+      viewOffsetX = parseInt(hPanSliderEl.value, 10);
+      render();
+    });
+  }
   wire('btn-auto-layout',  autoLayout);
   wire('btn-auto-layout2', autoLayout);
   wire('btn-align-arrows', alignArrowsOnly);
